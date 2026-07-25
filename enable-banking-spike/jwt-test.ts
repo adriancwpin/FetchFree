@@ -44,9 +44,11 @@ const startAuthorizationBody = { //what we send
         country: 'FI',
     },
     state: crypto.randomUUID(), //ensure two items does not share the same id
-    redirect_url: 'http://localhost:3000/callback',
+    redirect_url: 'http://localhost:3000/callback', //redirect
     psu_type: 'personal',
 }
+
+console.log('State sent:', startAuthorizationBody.state);
 
  //what we get for the response
 const startAuthorizationResponse = await fetch('https://api.enablebanking.com/auth', 
@@ -62,6 +64,24 @@ const startAuthorizationResponse = await fetch('https://api.enablebanking.com/au
 );
 
 const startAuthorizationData = await startAuthorizationResponse.json();
+
+const code = '43177254-0a5f-46a0-bf05-3144c8cd4187';
+
+const createSessionResponse = await fetch('https://api.enablebanking.com/sessions',
+    {
+        method: 'POST',
+        headers: {
+            ...baseHeader,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({code}),
+    }
+);
+
+console.log('Session status code:', createSessionResponse.status);
+
+const sessionData = await createSessionResponse.text();
+console.log('Session response:', sessionData);
 
 console.log('Start Authorizing response:');
 console.log(JSON.stringify(startAuthorizationData,null, 2));
