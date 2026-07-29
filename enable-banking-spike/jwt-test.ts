@@ -1,6 +1,29 @@
 import fs from 'node:fs';
 import jwt from 'jsonwebtoken';
 import 'dotenv/config';
+import http from "node:http";
+
+function waitForCallback(): Promise<{ code: string; state: string }> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      const fullURL = new URL(req.url as string, "http://localhost:3000");
+
+      const code = fullURL.searchParams.get("code");
+      const state = fullURL.searchParams.get("state");
+
+      res.end("Success! You can close this tab");
+
+      if (code && state) {
+        server.close();
+        resolve({ code, state });
+      }
+    });
+
+    server.listen(3000, () => {
+      console.log("Server listening from port 3000");
+    });
+  });
+}
 
 //read the file
 const privateKey = fs.readFileSync(process.env.ENABLE_BANKING_PRIVATE_KEY_PATH as string);
@@ -65,26 +88,40 @@ const startAuthorizationResponse = await fetch('https://api.enablebanking.com/au
 
 const startAuthorizationData = await startAuthorizationResponse.json();
 
-const code = '43177254-0a5f-46a0-bf05-3144c8cd4187';
+console.log('Start Authorizing Process...');
+console.log(JSON.stringify(startAuthorizationData,null,2));
 
-const createSessionResponse = await fetch('https://api.enablebanking.com/sessions',
+//pause here and wait for the user to approve in browser
+console.log('\n>>> Open this URL in your browser to approve access:');
+console.log(startAuthorizationData.url);
+console.log('\nWaiting for redirect...\n');
+
+const { code, state } = await waitForCallback();
+
+console.log(`Callback received. Code: ${code} State: ${state}`);
+
+//do CSRF check
+if(state != startAuthorizationBody.state){
+    throw new Error(
+        `State mismatch! Sent ${startAuthorizationBody.state}, received ${state}. Aborting — this could be a spoofed request.`
+    );
+}
+
+//exchange code for the session token
+const createSessionResponse =  await fetch('https://api.enablebanking.com/sessions',
     {
         method: 'POST',
-        headers: {
+        headers:{
             ...baseHeader,
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({code}),
+        body: JSON.stringify({ code }),
     }
 );
 
-console.log('Session status code:', createSessionResponse.status);
-
+console.log("Session status code:", createSessionResponse.status);
 const sessionData = await createSessionResponse.text();
 console.log('Session response:', sessionData);
-
-console.log('Start Authorizing response:');
-console.log(JSON.stringify(startAuthorizationData,null, 2));
 
 
 
