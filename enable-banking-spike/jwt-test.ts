@@ -45,15 +45,18 @@ const baseHeader = {
     Authorization: `Bearer ${token}`,
 };
 
-//fetch the list available in the UK
-const aspspsResponse = await fetch('https://api.enablebanking.com/aspsps?country=FI', {
+//fetch the list of available ASPSPs
+const aspspsResponse = await fetch('https://api.enablebanking.com/aspsps', {
     headers: baseHeader,
 });
 
 const aspspsData = await aspspsResponse.json();
 
-console.log('Available ASPS:');
-console.log(JSON.stringify(aspspsData,null, 2));
+const mockEntries = aspspsData.aspsps.filter((a: any) =>
+  a.name.toLowerCase().includes('mock')
+);
+console.log('Mock ASPSP entries found:');
+console.log(JSON.stringify(mockEntries, null, 2));
 
 // Start the authorization process
 const validUntil = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000); // 10 days ahead
@@ -63,8 +66,8 @@ const startAuthorizationBody = { //what we send
         valid_until : validUntil.toISOString(),
     },
     aspsp: {
-        name: 'Nordea',  // TODO: replace with a real name from your ASPSPs list
-        country: 'FI',
+        name: 'Mock ASPSP',
+        country: 'IE', //change to Ireland
     },
     state: crypto.randomUUID(), //ensure two items does not share the same id
     redirect_url: 'http://localhost:3000/callback', //redirect
@@ -121,9 +124,36 @@ const createSessionResponse =  await fetch('https://api.enablebanking.com/sessio
 
 console.log("Session status code:", createSessionResponse.status);
 const sessionData = await createSessionResponse.text();
-console.log('Session response:', sessionData);
+const sessionJson = JSON.parse(sessionData); //convert into JSON file
+
+if (!sessionJson.accounts || sessionJson.accounts.length === 0) {
+  console.log('No accounts in session response:', sessionJson);
+  throw new Error('Session did not return any accounts — check status code above.');
+}
+
+const firstAccountUid = sessionJson.accounts[0].uid;
+console.log('Session response:', sessionJson);
+console.log('\nFetching balances for account:', firstAccountUid);
 
 
+const balancesResponse = await fetch(
+  `https://api.enablebanking.com/accounts/${firstAccountUid}/balances`,
+  { headers: baseHeader }
+);
+
+const balancesData = await balancesResponse.json();
+console.log('Balances status:', balancesResponse.status);
+console.log('Balances:', JSON.stringify(balancesData, null, 2));
+
+console.log('\nFetching transactions for account:', firstAccountUid);
+
+const transactionsResponse = await fetch(
+  `https://api.enablebanking.com/accounts/${firstAccountUid}/transactions`,
+  { headers: baseHeader }
+);
+const transactionsData = await transactionsResponse.json();
+console.log('Transactions status:', transactionsResponse.status);
+console.log('Transactions:', JSON.stringify(transactionsData, null, 2));
 
 
 
