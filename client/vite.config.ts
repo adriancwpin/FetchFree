@@ -11,4 +11,8 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    // Server's PORT; must match the Enable Banking redirect URI (localhost:3000/callback).
+    proxy: { '/api': 'http://localhost:3000' },
+  },
 })
