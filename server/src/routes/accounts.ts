@@ -1,4 +1,4 @@
-import { Router } from 'express'
+import { Router, type NextFunction, type Request, type Response } from 'express'
 import * as enableBanking from '../enableBankingClient.js'
 import { sessionStore } from '../sessionStore.js'
 
@@ -7,18 +7,29 @@ export const accountsRouter = Router()
 accountsRouter.get('/', (_req, res) => {
   const session = sessionStore.getCurrentSession()
   if (!session) {
-    res.status(404).send('No active bank session — complete /api/auth/start first')
+    res.status(404).json({ error: 'No active bank session — complete /api/auth/start first' })
     return
   }
   res.json(session.accounts)
 })
 
-accountsRouter.get('/:accountUid/balances', async (req, res) => {
+// Only proxy accounts that belong to the current session.
+function requireSessionAccount(req: Request, res: Response, next: NextFunction): void {
+  const session = sessionStore.getCurrentSession()
+  const owned = session?.accounts.some((account) => account.uid === req.params.accountUid)
+  if (!owned) {
+    res.status(404).json({ error: 'Unknown account' })
+    return
+  }
+  next()
+}
+
+accountsRouter.get('/:accountUid/balances', requireSessionAccount, async (req, res) => {
   const balances = await enableBanking.getBalances(req.params.accountUid as string)
   res.json(balances)
 })
 
-accountsRouter.get('/:accountUid/transactions', async (req, res) => {
+accountsRouter.get('/:accountUid/transactions', requireSessionAccount, async (req, res) => {
   const transactions = await enableBanking.getTransactions(req.params.accountUid as string)
   res.json(transactions)
 })
