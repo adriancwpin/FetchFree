@@ -55,7 +55,17 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
 }
 
 export function getStatus() {
-  return request('/api/auth/status', z.object({ connected: z.boolean() }))
+  return request(
+    '/api/auth/status',
+    z.object({ connected: z.boolean(), validUntil: z.string().nullable() }),
+  )
+}
+
+export async function disconnect() {
+  const response = await fetch('/api/auth/session', { method: 'DELETE' })
+  if (!response.ok) {
+    throw new Error(`Disconnect failed with status ${response.status}`)
+  }
 }
 
 export function startAuth() {

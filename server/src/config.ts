@@ -20,4 +20,5 @@ export const config = {
   // Must exactly match the redirect URI registered with Enable Banking for this app.
   callbackUrl: `http://localhost:${port}/callback`,
   apiBaseUrl: 'https://api.enablebanking.com',
+  dbPath: process.env.DB_PATH ?? './data/fetchfree.db',
 }

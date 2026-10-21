@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as api from '@/lib/api'
 
 export function useStatus() {
@@ -10,6 +10,17 @@ export function useStartAuth() {
     mutationFn: api.startAuth,
     onSuccess: ({ url }) => {
       window.location.href = url
+    },
+  })
+}
+
+export function useDisconnect() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: api.disconnect,
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey: ['accounts'] })
+      return queryClient.invalidateQueries({ queryKey: ['status'] })
     },
   })
 }
