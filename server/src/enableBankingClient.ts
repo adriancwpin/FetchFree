@@ -1,6 +1,8 @@
 import jwt from 'jsonwebtoken'
 import { config } from './config.js'
 
+export const SESSION_DAYS = 10
+
 export class EnableBankingError extends Error {
   constructor(
     public readonly status: number,
@@ -25,16 +27,19 @@ function createJwt(): string {
   )
 }
 
-async function request<T>(path: string, body?: unknown): Promise<T> {
+async function request<T>(
+  path: string,
+  options: { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown } = {},
+): Promise<T> {
   const init: RequestInit = {
+    method: options.method ?? (options.body === undefined ? 'GET' : 'POST'),
     headers: {
       Authorization: `Bearer ${createJwt()}`,
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
   }
-  if (body !== undefined) {
-    init.method = 'POST'
-    init.body = JSON.stringify(body)
+  if (options.body !== undefined) {
+    init.body = JSON.stringify(options.body)
   }
 
   const response = await fetch(`${config.apiBaseUrl}${path}`, init)
@@ -57,21 +62,29 @@ export async function startAuthorization(options: {
   aspspName: string
   country: string
 }): Promise<{ url: string }> {
-  const validUntil = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000)
+  const validUntil = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000)
 
   return request('/auth', {
-    access: { valid_until: validUntil.toISOString() },
-    aspsp: { name: options.aspspName, country: options.country },
-    state: options.state,
-    redirect_url: options.redirectUrl,
-    psu_type: 'personal',
+    body: {
+      access: { valid_until: validUntil.toISOString() },
+      aspsp: { name: options.aspspName, country: options.country },
+      state: options.state,
+      redirect_url: options.redirectUrl,
+      psu_type: 'personal',
+    },
   })
 }
 
-export async function createSession(
-  code: string,
-): Promise<{ session_id: string; accounts: { uid: string }[] }> {
-  return request('/sessions', { code })
+export async function createSession(code: string): Promise<{
+  session_id: string
+  accounts: { uid: string }[]
+  access?: { valid_until?: string }
+}> {
+  return request('/sessions', { body: { code } })
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  await request(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
 
 export async function getBalances(accountUid: string): Promise<unknown> {

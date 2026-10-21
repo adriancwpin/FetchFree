@@ -6,7 +6,21 @@ import { sessionStore } from '../sessionStore.js'
 export const authRouter = Router()
 
 authRouter.get('/status', (_req, res) => {
-  res.json({ connected: sessionStore.getCurrentSession() !== null })
+  const session = sessionStore.getCurrentSession()
+  res.json({ connected: session !== null, validUntil: session?.validUntil ?? null })
+})
+
+authRouter.delete('/session', async (_req, res) => {
+  const sessionId = sessionStore.clearCurrentSession()
+  if (sessionId) {
+    // Best effort: the local session is already gone even if the bank revoke fails.
+    try {
+      await enableBanking.deleteSession(sessionId)
+    } catch (err) {
+      console.error('Failed to revoke session at Enable Banking', err)
+    }
+  }
+  res.status(204).end()
 })
 
 authRouter.post('/start', async (_req, res) => {
@@ -57,9 +71,14 @@ callbackRouter.get('/callback', async (req, res) => {
       return
     }
 
+    const fallbackValidUntil = new Date(
+      Date.now() + enableBanking.SESSION_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString()
+
     sessionStore.setCurrentSession({
       sessionId: session.session_id,
       accounts: session.accounts,
+      validUntil: session.access?.valid_until ?? fallbackValidUntil,
     })
   } catch (err) {
     console.error('Failed to create session', err)

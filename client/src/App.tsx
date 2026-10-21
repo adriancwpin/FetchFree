@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { AccountsView } from '@/components/AccountsView'
 import { ConnectBank } from '@/components/ConnectBank'
+import { ConnectionBar } from '@/components/ConnectionBar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useStatus } from '@/hooks/useBank'
 
@@ -34,7 +35,10 @@ function App() {
       ) : status.isError ? (
         <p className="text-sm text-destructive">Could not reach the server: {status.error.message}</p>
       ) : status.data.connected ? (
-        <AccountsView />
+        <>
+          <ConnectionBar validUntil={status.data.validUntil} />
+          <AccountsView />
+        </>
       ) : (
         <ConnectBank error={callbackError} />
       )}
