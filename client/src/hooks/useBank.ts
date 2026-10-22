@@ -8,6 +8,25 @@ const BANK_QUERY_OPTIONS = {
   refetchOnWindowFocus: false,
 }
 
+// The bank directory barely changes; the server caches it for an hour too.
+const DIRECTORY_QUERY_OPTIONS = {
+  staleTime: 60 * 60 * 1000,
+  refetchOnWindowFocus: false,
+}
+
+export function useCountries() {
+  return useQuery({ queryKey: ['countries'], queryFn: api.getCountries, ...DIRECTORY_QUERY_OPTIONS })
+}
+
+export function useBanks(country: string) {
+  return useQuery({
+    queryKey: ['banks', country],
+    queryFn: () => api.getBanks(country),
+    enabled: country !== '',
+    ...DIRECTORY_QUERY_OPTIONS,
+  })
+}
+
 export function useStatus() {
   return useQuery({ queryKey: ['status'], queryFn: api.getStatus })
 }

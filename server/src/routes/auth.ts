@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express'
+import * as bankDirectory from '../bankDirectory.js'
 import { config } from '../config.js'
 import * as enableBanking from '../enableBankingClient.js'
 import { sessionStore } from '../sessionStore.js'
@@ -45,6 +46,7 @@ authRouter.get('/status', (_req, res) => {
   res.json({
     connected: session !== null,
     validUntil: session?.validUntil ?? null,
+    bank: session?.bank ?? null,
     // Where the client sends the browser to start a bank login.
     loginUrl: new URL('/login', config.callbackUrl).toString(),
   })
@@ -58,29 +60,46 @@ authRouter.delete('/session', (_req, res) => {
 // Mounted at the server root, next to /callback, so both share the cookie host.
 export const callbackRouter = Router()
 
-callbackRouter.get('/login', async (_req, res) => {
-  const state = crypto.randomUUID()
-  sessionStore.addPendingAuth(state)
+// GET /login?bank=<name>&country=<CC>: starts a login with a bank chosen in the picker.
+callbackRouter.get('/login', async (req, res) => {
+  // Only a top-level navigation (the Connect link) may start a login. Browsers label embedded
+  // requests (<img>, <script>, fetch from another site) with a different Sec-Fetch-Dest, so another
+  // website can't make the browser start logins and use up Enable Banking calls.
+  const fetchDest = req.get('sec-fetch-dest')
+  if (fetchDest && fetchDest !== 'document') {
+    res.status(403).json({ error: 'A login must be started by opening the link directly' })
+    return
+  }
+
+  const bankName = typeof req.query.bank === 'string' ? req.query.bank : ''
+  const country = typeof req.query.country === 'string' ? req.query.country.toUpperCase() : ''
 
   let url: string
   try {
+    const aspsp = await bankDirectory.findBank(bankName, country)
+    if (!aspsp) {
+      redirectToClient(res, { error: 'unknown_bank' })
+      return
+    }
+
+    const state = crypto.randomUUID()
+    sessionStore.addPendingAuth(state, { name: aspsp.name, country: aspsp.country })
     const result = await enableBanking.startAuthorization({
       state,
       redirectUrl: config.callbackUrl,
-      aspspName: 'Mock ASPSP',
-      country: 'IE',
+      aspsp,
     })
     url = result.url
+    res.cookie(`${STATE_COOKIE_PREFIX}${state}`, '1', {
+      ...STATE_COOKIE_OPTIONS,
+      maxAge: sessionStore.PENDING_AUTH_TTL_MS,
+    })
   } catch (err) {
     console.error('Failed to start bank authorization', err)
     redirectToClient(res, { error: 'start_failed' })
     return
   }
 
-  res.cookie(`${STATE_COOKIE_PREFIX}${state}`, '1', {
-    ...STATE_COOKIE_OPTIONS,
-    maxAge: sessionStore.PENDING_AUTH_TTL_MS,
-  })
   res.redirect(url)
 })
 
@@ -100,7 +119,8 @@ callbackRouter.get('/callback', async (req, res) => {
   }
 
   // The state must be one we issued (and unused) AND one this browser started.
-  if (!hasCookie(req, `${STATE_COOKIE_PREFIX}${state}`) || !sessionStore.consumePendingAuth(state)) {
+  const pending = hasCookie(req, `${STATE_COOKIE_PREFIX}${state}`) ? sessionStore.consumePendingAuth(state) : null
+  if (!pending) {
     redirectToClient(res, { error: 'invalid_state' })
     return
   }
@@ -122,6 +142,7 @@ callbackRouter.get('/callback', async (req, res) => {
       sessionId: session.session_id,
       accounts: session.accounts,
       validUntil: session.access?.valid_until ?? fallbackValidUntil,
+      bank: pending.bank,
     })
   } catch (err) {
     console.error('Failed to create session', err)

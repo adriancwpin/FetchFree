@@ -30,13 +30,21 @@ function createJwt(): string {
   )
 }
 
+// Identifies the user (PSU) when they're actively using the app. Some banks require these on
+// account data calls, and PSD2 lets banks cap reads made *without* the user present (~4/day).
+export interface PsuHeaders {
+  'Psu-Ip-Address'?: string
+  'Psu-User-Agent'?: string
+}
+
 async function request<T>(
   path: string,
-  options: { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown } = {},
+  options: { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown; headers?: PsuHeaders } = {},
 ): Promise<T> {
   const init: RequestInit = {
     method: options.method ?? (options.body === undefined ? 'GET' : 'POST'),
     headers: {
+      ...options.headers,
       Authorization: `Bearer ${createJwt()}`,
       ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
@@ -85,22 +93,58 @@ async function request<T>(
   return data as T
 }
 
-export async function listAspsps(): Promise<unknown> {
-  return request('/aspsps')
+// Countries this Enable Banking application is enabled for.
+export async function listCountries(): Promise<string[]> {
+  const data = await request<{ countries?: string[] }>('/application')
+  return data.countries ?? []
+}
+
+export interface Aspsp {
+  name: string
+  country: string
+  logo: string | null
+  beta: boolean
+  // Longest consent the bank allows, in seconds.
+  maximumConsentValidity: number | null
+}
+
+// Banks in `country` that support personal accounts.
+export async function listAspsps(country: string): Promise<Aspsp[]> {
+  const params = new URLSearchParams({ country, psu_type: 'personal' })
+  const data = await request<{
+    aspsps?: {
+      name: string
+      country: string
+      logo?: string | null
+      beta?: boolean
+      maximum_consent_validity?: number | null
+    }[]
+  }>(`/aspsps?${params}`)
+  return (data.aspsps ?? []).map((aspsp) => ({
+    name: aspsp.name,
+    country: aspsp.country,
+    logo: aspsp.logo ?? null,
+    beta: aspsp.beta ?? false,
+    maximumConsentValidity: aspsp.maximum_consent_validity ?? null,
+  }))
 }
 
 export async function startAuthorization(options: {
   state: string
   redirectUrl: string
-  aspspName: string
-  country: string
+  aspsp: Aspsp
 }): Promise<{ url: string }> {
-  const validUntil = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000)
+  // Our usual consent length, unless the bank allows less.
+  const consentMs = Math.min(
+    SESSION_DAYS * 24 * 60 * 60 * 1000,
+    (options.aspsp.maximumConsentValidity ?? Infinity) * 1000,
+  )
+  const validUntil = new Date(Date.now() + consentMs)
 
   return request('/auth', {
     body: {
       access: { valid_until: validUntil.toISOString() },
-      aspsp: { name: options.aspspName, country: options.country },
+      aspsp: { name: options.aspsp.name, country: options.aspsp.country },
       state: options.state,
       redirect_url: options.redirectUrl,
       psu_type: 'personal',
@@ -120,8 +164,8 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await request(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
 
-export async function getBalances(accountUid: string): Promise<unknown> {
-  return request(`/accounts/${encodeURIComponent(accountUid)}/balances`)
+export async function getBalances(accountUid: string, psuHeaders: PsuHeaders): Promise<unknown> {
+  return request(`/accounts/${encodeURIComponent(accountUid)}/balances`, { headers: psuHeaders })
 }
 
 // Safety cap so a misbehaving continuation_key can't loop forever.
@@ -142,6 +186,7 @@ class DateRangeRefusedError extends Error {
 async function fetchAllTransactionPages(
   accountUid: string,
   dateFrom: string,
+  psuHeaders: PsuHeaders,
 ): Promise<{ transactions: unknown[]; truncated: boolean }> {
   const transactions: unknown[] = []
   const seenKeys = new Set<string>()
@@ -153,7 +198,9 @@ async function fetchAllTransactionPages(
 
     let data: { transactions?: unknown[]; continuation_key?: string | null }
     try {
-      data = await request(`/accounts/${encodeURIComponent(accountUid)}/transactions?${params}`)
+      data = await request(`/accounts/${encodeURIComponent(accountUid)}/transactions?${params}`, {
+        headers: psuHeaders,
+      })
     } catch (err) {
       // Only a first-page 400/422 is about the date range; auth, rate-limit, 5xx or later-page errors are real failures.
       if (page === 0 && err instanceof EnableBankingError && DATE_RANGE_REFUSED_STATUSES.has(err.status)) {
@@ -182,14 +229,15 @@ export async function getTransactions(
   accountUid: string,
   dateFrom: string,
   fallbackDateFrom: string,
+  psuHeaders: PsuHeaders,
 ): Promise<{ transactions: unknown[]; truncated: boolean; dateFrom: string }> {
   try {
-    return { ...(await fetchAllTransactionPages(accountUid, dateFrom)), dateFrom }
+    return { ...(await fetchAllTransactionPages(accountUid, dateFrom, psuHeaders)), dateFrom }
   } catch (err) {
     if (!(err instanceof DateRangeRefusedError)) throw err
     console.warn(`Transactions from ${dateFrom} refused (${err.cause.status}); retrying from ${fallbackDateFrom}`)
     try {
-      return { ...(await fetchAllTransactionPages(accountUid, fallbackDateFrom)), dateFrom: fallbackDateFrom }
+      return { ...(await fetchAllTransactionPages(accountUid, fallbackDateFrom, psuHeaders)), dateFrom: fallbackDateFrom }
     } catch (retryErr) {
       // Surface the bank's own error to the error handler, not the internal wrapper.
       throw retryErr instanceof DateRangeRefusedError ? retryErr.cause : retryErr

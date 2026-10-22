@@ -75,9 +75,13 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
   return parsed.data
 }
 
+const bankRefSchema = z.object({ name: z.string(), country: z.string() })
+
 const statusSchema = z.object({
   connected: z.boolean(),
   validUntil: z.string().nullable(),
+  // The connected bank; null for connections made before the bank was recorded.
+  bank: bankRefSchema.nullable(),
   // Server page that starts a bank login; the browser navigates there.
   loginUrl: z.string(),
 })
@@ -93,6 +97,23 @@ export async function disconnect() {
   if (!response.ok) {
     throw new ApiError(`Disconnect failed with status ${response.status}`, response.status >= 500)
   }
+}
+
+export function getCountries() {
+  return request('/api/banks/countries', z.array(z.string()))
+}
+
+const bankSchema = z.object({
+  name: z.string(),
+  country: z.string(),
+  logo: z.string().nullable(),
+  beta: z.boolean(),
+})
+
+export type Bank = z.infer<typeof bankSchema>
+
+export function getBanks(country: string) {
+  return request(`/api/banks?${new URLSearchParams({ country })}`, z.array(bankSchema))
 }
 
 export function getAccounts() {

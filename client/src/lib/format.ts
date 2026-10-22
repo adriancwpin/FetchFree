@@ -1,3 +1,14 @@
+const regionNames = new Intl.DisplayNames(undefined, { type: 'region' })
+
+// "FI" → "Finland". Intl throws on a malformed code, so fall back to the code itself.
+export function countryName(code: string): string {
+  try {
+    return regionNames.of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
 // Formats the amount without its sign (the caller shows direction). Unparseable amounts are
 // passed through unchanged so formatAmount can show the raw text.
 export function formatUnsignedAmount(amount: string, currency: string): string {

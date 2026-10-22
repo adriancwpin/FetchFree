@@ -5,6 +5,7 @@ import { config } from './config.js'
 import { EnableBankingError } from './enableBankingClient.js'
 import { authRouter, callbackRouter } from './routes/auth.js'
 import { accountsRouter } from './routes/accounts.js'
+import { banksRouter } from './routes/banks.js'
 
 const app = express()
 
@@ -13,6 +14,7 @@ app.use(express.json())
 
 app.use('/api/auth', authRouter)
 app.use('/api/accounts', accountsRouter)
+app.use('/api/banks', banksRouter)
 // Mounted at root: must match the registered redirect URI's path exactly.
 app.use(callbackRouter)
 
