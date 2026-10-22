@@ -29,19 +29,34 @@ accountsRouter.get('/:accountUid/balances', requireSessionAccount, async (req, r
   res.json(balances)
 })
 
-// Months of history to fetch, including the current month. Must match the client's summary window.
+// Months of history to fetch, including the current month. The response reports the window
+// actually used, so the client never needs its own copy of this.
 const HISTORY_MONTHS = 6
+// Many banks only allow ~90 days of history once the login is a few minutes old (PSD2).
+const FALLBACK_HISTORY_DAYS = 89
 
-function historyStartDate(): string {
-  const now = new Date()
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (HISTORY_MONTHS - 1), 1))
-  return start.toISOString().slice(0, 10)
+function toDateString(date: Date): string {
+  return date.toISOString().slice(0, 10)
 }
 
 accountsRouter.get('/:accountUid/transactions', requireSessionAccount, async (req, res) => {
-  const transactions = await enableBanking.getTransactions(
-    req.params.accountUid as string,
-    historyStartDate(),
+  const accountUid = req.params.accountUid as string
+  const now = new Date()
+  const dateTo = toDateString(now)
+  let dateFrom = toDateString(
+    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (HISTORY_MONTHS - 1), 1)),
   )
-  res.json(transactions)
+
+  let result
+  try {
+    result = await enableBanking.getTransactions(accountUid, dateFrom)
+  } catch (err) {
+    if (!(err instanceof enableBanking.EnableBankingError)) throw err
+    // Retry once with a window most banks accept; a second failure goes to the error handler.
+    console.warn(`Transactions from ${dateFrom} rejected (${err.status}); retrying with ${FALLBACK_HISTORY_DAYS} days`)
+    dateFrom = toDateString(new Date(now.getTime() - FALLBACK_HISTORY_DAYS * 24 * 60 * 60 * 1000))
+    result = await enableBanking.getTransactions(accountUid, dateFrom)
+  }
+
+  res.json({ ...result, dateFrom, dateTo })
 })

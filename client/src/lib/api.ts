@@ -29,6 +29,8 @@ const transactionSchema = z.looseObject({
   entry_reference: z.string().nullish(),
   transaction_amount: amountSchema,
   credit_debit_indicator: z.enum(['CRDT', 'DBIT']).nullish(),
+  // BOOK (settled) or PDNG (pending), among others.
+  status: z.string().nullish(),
   booking_date: z.string().nullish(),
   value_date: z.string().nullish(),
   remittance_information: z.array(z.string()).nullish(),
@@ -84,10 +86,20 @@ export async function getBalances(accountUid: string) {
   return data.balances
 }
 
-export async function getTransactions(accountUid: string) {
-  const data = await request(
+const transactionsResponseSchema = z.object({
+  transactions: z.array(transactionSchema),
+  // The window the server actually fetched (YYYY-MM-DD); it may be shorter if the bank refused 6 months.
+  dateFrom: z.string(),
+  dateTo: z.string(),
+  // True when the server hit its page cap and older transactions may be missing.
+  truncated: z.boolean(),
+})
+
+export type TransactionsResponse = z.infer<typeof transactionsResponseSchema>
+
+export function getTransactions(accountUid: string) {
+  return request(
     `/api/accounts/${encodeURIComponent(accountUid)}/transactions`,
-    z.object({ transactions: z.array(transactionSchema) }),
+    transactionsResponseSchema,
   )
-  return data.transactions
 }

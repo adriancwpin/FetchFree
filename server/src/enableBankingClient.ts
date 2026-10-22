@@ -95,10 +95,11 @@ export async function getBalances(accountUid: string): Promise<unknown> {
 const MAX_TRANSACTION_PAGES = 20
 
 // Enable Banking pages transactions via continuation_key; follow it to return the whole period.
+// `truncated` is true when the page cap was hit and older transactions may be missing.
 export async function getTransactions(
   accountUid: string,
   dateFrom: string,
-): Promise<{ transactions: unknown[] }> {
+): Promise<{ transactions: unknown[]; truncated: boolean }> {
   const transactions: unknown[] = []
   let continuationKey: string | null | undefined
 
@@ -111,8 +112,8 @@ export async function getTransactions(
     )
     transactions.push(...(data.transactions ?? []))
     continuationKey = data.continuation_key
-    if (!continuationKey) break
+    if (!continuationKey) return { transactions, truncated: false }
   }
 
-  return { transactions }
+  return { transactions, truncated: true }
 }

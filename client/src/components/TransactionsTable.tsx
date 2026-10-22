@@ -3,11 +3,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useTransactions } from '@/hooks/useBank'
 import type { Transaction } from '@/lib/api'
 import { formatAmount } from '@/lib/format'
+import { directionOf } from '@/lib/summary'
 import { cn } from '@/lib/utils'
 
 function describe(transaction: Transaction): string {
   const counterparty =
-    transaction.credit_debit_indicator === 'CRDT' ? transaction.debtor?.name : transaction.creditor?.name
+    directionOf(transaction) === 'in' ? transaction.debtor?.name : transaction.creditor?.name
   return counterparty ?? transaction.remittance_information?.join(' ') ?? '—'
 }
 
@@ -20,7 +21,7 @@ export function TransactionsTable({ accountUid }: { accountUid: string }) {
   if (transactions.isError) {
     return <p className="text-sm text-destructive">{transactions.error.message}</p>
   }
-  if (transactions.data.length === 0) {
+  if (transactions.data.transactions.length === 0) {
     return <p className="text-sm text-muted-foreground">No transactions.</p>
   }
 
@@ -34,9 +35,10 @@ export function TransactionsTable({ accountUid }: { accountUid: string }) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {transactions.data.map((transaction, index) => {
-          const isDebit = transaction.credit_debit_indicator === 'DBIT'
-          const { amount, currency } = transaction.transaction_amount
+        {transactions.data.transactions.map((transaction, index) => {
+          const isDebit = directionOf(transaction) === 'out'
+          const { currency } = transaction.transaction_amount
+          const amount = String(Math.abs(Number(transaction.transaction_amount.amount)))
           return (
             <TableRow key={transaction.entry_reference ?? index}>
               <TableCell className="tabular-nums">

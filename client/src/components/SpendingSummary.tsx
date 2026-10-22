@@ -1,9 +1,22 @@
 import { useTransactions } from '@/hooks/useBank'
 import { formatAmount } from '@/lib/format'
-import { summarizeByMonth, SUMMARY_MONTHS, type MonthSummary } from '@/lib/summary'
+import { summarizeByMonth, type MonthSummary } from '@/lib/summary'
 import { cn } from '@/lib/utils'
 
 const CHART_HEIGHT_PX = 160
+
+// Signed amount, e.g. +€11.71 / −€538.05 / €0.00, plus its colour class.
+function signedAmount(value: number, currency: string): { text: string; className: string } {
+  const text = formatAmount(String(Math.abs(value)), currency)
+  if (value > 0) return { text: `+${text}`, className: 'text-emerald-600' }
+  if (value < 0) return { text: `−${text}`, className: 'text-destructive' }
+  return { text, className: 'text-muted-foreground' }
+}
+
+function longDate(date: string): string {
+  const [year, month, day] = date.split('-').map(Number)
+  return new Date(year ?? 0, (month ?? 1) - 1, day ?? 1).toLocaleDateString(undefined, { dateStyle: 'medium' })
+}
 
 function monthLabel(month: string, style: 'short' | 'long' = 'short'): string {
   const [year, monthIndex] = month.split('-').map(Number)
@@ -37,8 +50,8 @@ function niceCeiling(value: number): number {
 export function SpendingSummary({ accountUid }: { accountUid: string }) {
   const transactions = useTransactions(accountUid)
 
-  // Loading and error states are shown by TransactionsTable, which reads the same query.
-  if (!transactions.data) return null
+  // Loading/error and "no transactions at all" are shown by TransactionsTable below.
+  if (!transactions.data || transactions.data.transactions.length === 0) return null
 
   const summary = summarizeByMonth(transactions.data)
   const { currency } = summary
@@ -46,28 +59,29 @@ export function SpendingSummary({ accountUid }: { accountUid: string }) {
   if (!currency || (summary.totalIn === 0 && summary.totalOut === 0)) {
     return (
       <p className="text-sm text-muted-foreground">
-        No activity in the last {SUMMARY_MONTHS} months.
+        No activity since {longDate(transactions.data.dateFrom)}.
       </p>
     )
   }
 
   const axisMax = niceCeiling(Math.max(...summary.months.flatMap((m) => [m.moneyIn, m.moneyOut])))
+  const net = signedAmount(summary.net, currency)
 
   return (
-    <section className="flex flex-col gap-4" aria-label={`Money in and out, last ${SUMMARY_MONTHS} months`}>
+    <section className="flex flex-col gap-4" aria-label={`Money in and out since ${longDate(transactions.data.dateFrom)}`}>
       <dl className="grid grid-cols-3 gap-3">
         <Stat label="Money in" swatch="bg-series-in" value={formatAmount(String(summary.totalIn), currency)} />
         <Stat label="Money out" swatch="bg-series-out" value={formatAmount(String(summary.totalOut), currency)} />
         <Stat
           label="Net"
-          value={`${summary.net >= 0 ? '+' : '−'}${formatAmount(String(Math.abs(summary.net)), currency)}`}
-          valueClassName={summary.net >= 0 ? 'text-emerald-600' : 'text-destructive'}
+          value={net.text}
+          valueClassName={net.className}
         />
       </dl>
 
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-xs text-muted-foreground">Last {SUMMARY_MONTHS} months</p>
+          <p className="text-xs text-muted-foreground">Since {longDate(transactions.data.dateFrom)}</p>
           <ul className="flex gap-3 text-xs text-muted-foreground">
             <LegendItem swatch="bg-series-in" label="In" />
             <LegendItem swatch="bg-series-out" label="Out" />
@@ -112,6 +126,11 @@ export function SpendingSummary({ accountUid }: { accountUid: string }) {
             {summary.skipped} transaction{summary.skipped === 1 ? '' : 's'} in other currencies not included.
           </p>
         )}
+        {transactions.data.truncated && (
+          <p className="text-xs text-muted-foreground">
+            This account has too many transactions to load in full, so the earliest months may be incomplete.
+          </p>
+        )}
       </div>
 
       {/* Screen-reader version of the chart. */}
@@ -131,7 +150,7 @@ export function SpendingSummary({ accountUid }: { accountUid: string }) {
               <th scope="row">{monthLabel(month.month, 'long')}</th>
               <td>{formatAmount(String(month.moneyIn), currency)}</td>
               <td>{formatAmount(String(month.moneyOut), currency)}</td>
-              <td>{formatAmount(String(month.net), currency)}</td>
+              <td>{signedAmount(month.net, currency).text}</td>
             </tr>
           ))}
         </tbody>
@@ -185,8 +204,7 @@ function MonthColumn({ month, axisMax, currency }: { month: MonthSummary; axisMa
         <TooltipRow swatch="bg-series-in" label="In" value={formatAmount(String(month.moneyIn), currency)} />
         <TooltipRow swatch="bg-series-out" label="Out" value={formatAmount(String(month.moneyOut), currency)} />
         <p className="mt-1 border-t pt-1 text-muted-foreground tabular-nums">
-          Net {month.net >= 0 ? '+' : '−'}
-          {formatAmount(String(Math.abs(month.net)), currency)}
+          Net {signedAmount(month.net, currency).text}
         </p>
       </div>
     </div>
