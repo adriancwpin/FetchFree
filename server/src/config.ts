@@ -16,6 +16,8 @@ export const config = {
   appId: requireEnv('ENABLE_BANKING_APP_ID'),
   privateKey: fs.readFileSync(privateKeyPath),
   port,
+  // Loopback only by default: the API has no login yet, so it must not be reachable from the network.
+  host: process.env.HOST ?? '127.0.0.1',
   clientOrigin: requireEnv('CLIENT_ORIGIN'),
   // Must exactly match the redirect URI registered with Enable Banking for this app.
   callbackUrl: `http://localhost:${port}/callback`,

@@ -1,12 +1,10 @@
-import { Landmark, Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Landmark } from 'lucide-react'
+import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { useStartAuth } from '@/hooks/useBank'
 
-export function ConnectBank({ error }: { error: string | null }) {
-  const startAuth = useStartAuth()
-  const message = startAuth.error?.message ?? error
-
+// A plain link: the login starts on the server (it sets the login cookie on its own host, then
+// redirects to the bank), so the browser has to navigate there rather than call it with fetch.
+export function ConnectBank({ loginUrl, error }: { loginUrl: string; error: string | null }) {
   return (
     <Card className="w-full max-w-sm">
       <CardHeader>
@@ -16,11 +14,11 @@ export function ConnectBank({ error }: { error: string | null }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <Button size="lg" onClick={() => startAuth.mutate()} disabled={startAuth.isPending}>
-          {startAuth.isPending ? <Loader2 className="animate-spin" /> : <Landmark />}
+        <a href={loginUrl} className={buttonVariants({ size: 'lg' })}>
+          <Landmark />
           Connect bank
-        </Button>
-        {message && <p className="text-sm text-destructive">{message}</p>}
+        </a>
+        {error && <p className="text-sm text-destructive">{error}</p>}
       </CardContent>
     </Card>
   )

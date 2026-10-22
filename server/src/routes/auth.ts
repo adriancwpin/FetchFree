@@ -1,43 +1,34 @@
-import { Router, type Response } from 'express'
+import { Router, type Request, type Response } from 'express'
 import { config } from '../config.js'
 import * as enableBanking from '../enableBankingClient.js'
 import { sessionStore } from '../sessionStore.js'
 
-export const authRouter = Router()
+// Ties each OAuth `state` to the browser that started the login, so a callback link made by
+// someone else (login CSRF) can't attach their bank account to this app. The login starts with a
+// navigation to /login on this server, so the cookie is always set on the same host the bank
+// redirects back to. Each login gets its own cookie, so two logins in parallel don't clash.
+const STATE_COOKIE_PREFIX = 'fetchfree_auth_'
+const STATE_COOKIE_OPTIONS = {
+  httpOnly: true,
+  // Lax is still sent on the bank's top-level redirect back to /callback.
+  sameSite: 'lax' as const,
+  path: '/callback',
+}
 
-authRouter.get('/status', (_req, res) => {
-  const session = sessionStore.getCurrentSession()
-  res.json({ connected: session !== null, validUntil: session?.validUntil ?? null })
-})
+// Cookie names only; the value is never read, so a malformed value can't break the callback.
+function hasCookie(req: Request, name: string): boolean {
+  return (req.headers.cookie?.split(';') ?? []).some((part) => part.trim().split('=')[0] === name)
+}
 
-authRouter.delete('/session', async (_req, res) => {
-  const sessionId = sessionStore.clearCurrentSession()
-  if (sessionId) {
-    // Best effort: the local session is already gone even if the bank revoke fails.
-    try {
-      await enableBanking.deleteSession(sessionId)
-    } catch (err) {
-      console.error('Failed to revoke session at Enable Banking', err)
-    }
+// Best effort and not awaited by callers: locally the sessions are already gone, and a slow
+// bank shouldn't hold up the user.
+function revokeSessions(sessionIds: string[]): void {
+  for (const sessionId of sessionIds) {
+    enableBanking.deleteSession(sessionId).catch((err: unknown) => {
+      console.error(`Failed to revoke session ${sessionId} at Enable Banking`, err)
+    })
   }
-  res.status(204).end()
-})
-
-authRouter.post('/start', async (_req, res) => {
-  const state = crypto.randomUUID()
-  sessionStore.addPendingAuth(state)
-
-  const result = await enableBanking.startAuthorization({
-    state,
-    redirectUrl: config.callbackUrl,
-    aspspName: 'Mock ASPSP',
-    country: 'IE',
-  })
-
-  res.json({ url: result.url })
-})
-
-export const callbackRouter = Router()
+}
 
 function redirectToClient(res: Response, params: Record<string, string>): void {
   const url = new URL(config.clientOrigin)
@@ -47,9 +38,59 @@ function redirectToClient(res: Response, params: Record<string, string>): void {
   res.redirect(url.toString())
 }
 
+export const authRouter = Router()
+
+authRouter.get('/status', (_req, res) => {
+  const session = sessionStore.getCurrentSession()
+  res.json({
+    connected: session !== null,
+    validUntil: session?.validUntil ?? null,
+    // Where the client sends the browser to start a bank login.
+    loginUrl: new URL('/login', config.callbackUrl).toString(),
+  })
+})
+
+authRouter.delete('/session', (_req, res) => {
+  revokeSessions(sessionStore.clearSessions())
+  res.status(204).end()
+})
+
+// Mounted at the server root, next to /callback, so both share the cookie host.
+export const callbackRouter = Router()
+
+callbackRouter.get('/login', async (_req, res) => {
+  const state = crypto.randomUUID()
+  sessionStore.addPendingAuth(state)
+
+  let url: string
+  try {
+    const result = await enableBanking.startAuthorization({
+      state,
+      redirectUrl: config.callbackUrl,
+      aspspName: 'Mock ASPSP',
+      country: 'IE',
+    })
+    url = result.url
+  } catch (err) {
+    console.error('Failed to start bank authorization', err)
+    redirectToClient(res, { error: 'start_failed' })
+    return
+  }
+
+  res.cookie(`${STATE_COOKIE_PREFIX}${state}`, '1', {
+    ...STATE_COOKIE_OPTIONS,
+    maxAge: sessionStore.PENDING_AUTH_TTL_MS,
+  })
+  res.redirect(url)
+})
+
 callbackRouter.get('/callback', async (req, res) => {
   const code = req.query.code
   const state = req.query.state
+
+  if (typeof state === 'string') {
+    res.clearCookie(`${STATE_COOKIE_PREFIX}${state}`, STATE_COOKIE_OPTIONS)
+  }
 
   if (typeof code !== 'string' || typeof state !== 'string') {
     // The bank sends `error` instead of `code` when the user declines consent.
@@ -58,11 +99,13 @@ callbackRouter.get('/callback', async (req, res) => {
     return
   }
 
-  if (!sessionStore.consumePendingAuth(state)) {
+  // The state must be one we issued (and unused) AND one this browser started.
+  if (!hasCookie(req, `${STATE_COOKIE_PREFIX}${state}`) || !sessionStore.consumePendingAuth(state)) {
     redirectToClient(res, { error: 'invalid_state' })
     return
   }
 
+  let replacedSessionIds: string[]
   try {
     const session = await enableBanking.createSession(code)
 
@@ -75,7 +118,7 @@ callbackRouter.get('/callback', async (req, res) => {
       Date.now() + enableBanking.SESSION_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString()
 
-    sessionStore.setCurrentSession({
+    replacedSessionIds = sessionStore.setCurrentSession({
       sessionId: session.session_id,
       accounts: session.accounts,
       validUntil: session.access?.valid_until ?? fallbackValidUntil,
@@ -86,5 +129,7 @@ callbackRouter.get('/callback', async (req, res) => {
     return
   }
 
+  // A new login replaces the old connection(s); cancel them at the bank too.
+  revokeSessions(replacedSessionIds)
   redirectToClient(res, { connected: '1' })
 })

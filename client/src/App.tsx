@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { AccountsView } from '@/components/AccountsView'
 import { ConnectBank } from '@/components/ConnectBank'
 import { ConnectionBar } from '@/components/ConnectionBar'
@@ -6,13 +5,18 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useStatus } from '@/hooks/useBank'
 
 const CALLBACK_ERRORS: Record<string, string> = {
-  invalid_state: 'The bank redirect could not be verified. Please try again.',
+  invalid_state:
+    'The bank login could not be verified (it may have expired or been started in another browser). Please try again.',
   no_accounts: 'The bank did not share any accounts.',
   session_failed: 'Could not complete the bank connection. Please try again.',
   missing_code: 'The bank did not return an authorization code.',
+  start_failed: 'Could not start the bank login. Please try again.',
+  // Sent by the bank when the user cancels on its consent page.
+  access_denied: 'The bank login was cancelled.',
 }
 
 // The server's /callback redirects back here with ?connected=1 or ?error=<code>.
+// Read once at load, outside React: it clears the URL, so it must not run again on re-render.
 function readCallbackError(): string | null {
   const params = new URLSearchParams(window.location.search)
   const code = params.get('error')
@@ -23,8 +27,9 @@ function readCallbackError(): string | null {
   return CALLBACK_ERRORS[code] ?? `Bank connection failed (${code}).`
 }
 
+const callbackError = readCallbackError()
+
 function App() {
-  const [callbackError] = useState(readCallbackError)
   const status = useStatus()
 
   return (
@@ -40,7 +45,7 @@ function App() {
           <AccountsView />
         </>
       ) : (
-        <ConnectBank error={callbackError} />
+        <ConnectBank loginUrl={status.data.loginUrl} error={callbackError} />
       )}
     </div>
   )

@@ -40,23 +40,13 @@ function toDateString(date: Date): string {
 }
 
 accountsRouter.get('/:accountUid/transactions', requireSessionAccount, async (req, res) => {
-  const accountUid = req.params.accountUid as string
   const now = new Date()
-  const dateTo = toDateString(now)
-  let dateFrom = toDateString(
-    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (HISTORY_MONTHS - 1), 1)),
+  const result = await enableBanking.getTransactions(
+    req.params.accountUid as string,
+    toDateString(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (HISTORY_MONTHS - 1), 1))),
+    toDateString(new Date(now.getTime() - FALLBACK_HISTORY_DAYS * 24 * 60 * 60 * 1000)),
   )
-
-  let result
-  try {
-    result = await enableBanking.getTransactions(accountUid, dateFrom)
-  } catch (err) {
-    if (!(err instanceof enableBanking.EnableBankingError)) throw err
-    // Retry once with a window most banks accept; a second failure goes to the error handler.
-    console.warn(`Transactions from ${dateFrom} rejected (${err.status}); retrying with ${FALLBACK_HISTORY_DAYS} days`)
-    dateFrom = toDateString(new Date(now.getTime() - FALLBACK_HISTORY_DAYS * 24 * 60 * 60 * 1000))
-    result = await enableBanking.getTransactions(accountUid, dateFrom)
-  }
-
-  res.json({ ...result, dateFrom, dateTo })
+  // dateTo is the server's UTC date. The client treats it as a minimum end, not a cut-off,
+  // because a user ahead of UTC can already have transactions dated "tomorrow".
+  res.json({ ...result, dateTo: toDateString(now) })
 })
