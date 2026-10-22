@@ -13,6 +13,7 @@ export default defineConfig({
   },
   server: {
     // Server's PORT; must match the Enable Banking redirect URI (localhost:3000/callback).
-    proxy: { '/api': 'http://localhost:3000' },
+    // 127.0.0.1, not "localhost": the server binds IPv4 loopback only, and "localhost" can resolve to ::1.
+    proxy: { '/api': 'http://127.0.0.1:3000' },
   },
 })
