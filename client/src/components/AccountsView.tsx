@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { SpendingSummary } from '@/components/SpendingSummary'
 import { TransactionsTable } from '@/components/TransactionsTable'
 import { useAccounts, useBalances } from '@/hooks/useBank'
 import type { Account } from '@/lib/api'
@@ -58,9 +59,14 @@ function AccountCard({ account }: { account: Account }) {
       <CardContent className="flex flex-col gap-3">
         <Button variant="ghost" size="sm" className="self-start" onClick={() => setExpanded(!expanded)}>
           {expanded ? <ChevronDown /> : <ChevronRight />}
-          Transactions
+          Activity
         </Button>
-        {expanded && <TransactionsTable accountUid={account.uid} />}
+        {expanded && (
+          <>
+            <SpendingSummary accountUid={account.uid} />
+            <TransactionsTable accountUid={account.uid} />
+          </>
+        )}
       </CardContent>
     </Card>
   )

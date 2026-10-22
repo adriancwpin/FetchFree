@@ -37,6 +37,8 @@
     --color-popover: var(--popover);
     --color-card-foreground: var(--card-foreground);
     --color-card: var(--card);
+    --color-series-in: var(--series-in);
+    --color-series-out: var(--series-out);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
     --radius-sm: calc(var(--radius) * 0.6);
@@ -50,6 +52,9 @@
 
 :root {
     --background: oklch(1 0 0);
+    /* Spending chart series (validated categorical slots 1-2). */
+    --series-in: #2a78d6;
+    --series-out: #eb6834;
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);
     --card-foreground: oklch(0.145 0 0);
@@ -85,6 +90,8 @@
 
 .dark {
     --background: oklch(0.145 0 0);
+    --series-in: #3987e5;
+    --series-out: #d95926;
     --foreground: oklch(0.985 0 0);
     --card: oklch(0.205 0 0);
     --card-foreground: oklch(0.985 0 0);

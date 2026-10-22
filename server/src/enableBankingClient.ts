@@ -91,6 +91,28 @@ export async function getBalances(accountUid: string): Promise<unknown> {
   return request(`/accounts/${encodeURIComponent(accountUid)}/balances`)
 }
 
-export async function getTransactions(accountUid: string): Promise<unknown> {
-  return request(`/accounts/${encodeURIComponent(accountUid)}/transactions`)
+// Safety cap so a misbehaving continuation_key can't loop forever.
+const MAX_TRANSACTION_PAGES = 20
+
+// Enable Banking pages transactions via continuation_key; follow it to return the whole period.
+export async function getTransactions(
+  accountUid: string,
+  dateFrom: string,
+): Promise<{ transactions: unknown[] }> {
+  const transactions: unknown[] = []
+  let continuationKey: string | null | undefined
+
+  for (let page = 0; page < MAX_TRANSACTION_PAGES; page++) {
+    const params = new URLSearchParams({ date_from: dateFrom })
+    if (continuationKey) params.set('continuation_key', continuationKey)
+
+    const data = await request<{ transactions?: unknown[]; continuation_key?: string | null }>(
+      `/accounts/${encodeURIComponent(accountUid)}/transactions?${params}`,
+    )
+    transactions.push(...(data.transactions ?? []))
+    continuationKey = data.continuation_key
+    if (!continuationKey) break
+  }
+
+  return { transactions }
 }

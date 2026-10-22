@@ -29,7 +29,19 @@ accountsRouter.get('/:accountUid/balances', requireSessionAccount, async (req, r
   res.json(balances)
 })
 
+// Months of history to fetch, including the current month. Must match the client's summary window.
+const HISTORY_MONTHS = 6
+
+function historyStartDate(): string {
+  const now = new Date()
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (HISTORY_MONTHS - 1), 1))
+  return start.toISOString().slice(0, 10)
+}
+
 accountsRouter.get('/:accountUid/transactions', requireSessionAccount, async (req, res) => {
-  const transactions = await enableBanking.getTransactions(req.params.accountUid as string)
+  const transactions = await enableBanking.getTransactions(
+    req.params.accountUid as string,
+    historyStartDate(),
+  )
   res.json(transactions)
 })
