@@ -2,7 +2,7 @@
 
 This explains how the whole app works: what each part does, how data moves between the parts, and *why* it's built this way. Read it top to bottom once. After that, the **Check yourself** questions at the end are the best way to make it stick.
 
-> Status: describes the code on branch `feat/bank-picker` (October 2026). The bank picker (§4.1, step 1) is being finished on that branch.
+> Status: describes the code as of the `feat/tests` branch (October 2026), including the bank picker and the automated tests.
 
 ---
 
@@ -241,14 +241,33 @@ Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable
 ## 10. Known limitations and what's next
 
 1. **No users or login.** It's one shared connection, and safe only because the server is loopback-only.
-2. **No automated tests.** Everything so far was verified with one-off scripts.
+2. **No UI tests.** The logic is covered by automated tests (§11), but the React components aren't.
 3. **Transactions aren't stored**, so there's no history beyond what the bank returns.
 4. **No categories, search or weekly view** in the summary.
 5. If the bank revokes a session from its side, the app shows errors until you click Disconnect.
 
 ---
 
-## 11. Glossary
+## 11. Testing
+
+Run `npm test` in `server/` and in `client/`. GitHub Actions runs both on every push and pull request.
+
+| Where | What it covers | How it fakes the outside world |
+|---|---|---|
+| `server/src/sessionStore.test.ts` | Single-use, expiring logins; replacing and revoking sessions | In-memory SQLite (`DB_PATH=:memory:`) |
+| `server/src/db.migration.test.ts` | An old-format database gains the new columns and keeps its session | A temporary database file with the old schema |
+| `server/src/enableBankingClient.test.ts` | Timeouts, error pages, paging, the 89-day fallback rules, PSU headers, consent clamp | `fetch` replaced by a fake Enable Banking (`test/fakeBank.ts`) |
+| `server/src/bankDirectory.test.ts` | Caching, failures not cached, bank lookup | Fake Enable Banking |
+| `server/src/routes.test.ts` | The whole HTTP flow: `/login` guard, `/callback` state and cookie checks, account guard, error handling | supertest calls `app` directly, without a real server |
+| `client/src/lib/*.test.ts` | Summary maths, formatting, API error and retry rules | `fetch` replaced in the API tests |
+
+`server/test/setup.ts` runs before every server test file. It generates a throwaway private key and sets the environment variables, so tests never read your real `.env`, key or database.
+
+Splitting `app.ts` (the Express app) from `server.ts` (listening on ports) exists for testing: it lets supertest use the app without opening ports.
+
+---
+
+## 12. Glossary
 
 | Term | Meaning |
 |---|---|
@@ -266,7 +285,7 @@ Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable
 
 ---
 
-## 12. Check yourself
+## 13. Check yourself
 
 Try to answer each from memory before opening the answer.
 
