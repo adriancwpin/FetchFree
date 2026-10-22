@@ -1,0 +1,7 @@
+{
+  // Type-checks the tests too (the main tsconfig excludes them from the build). No output.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true, "rootDir": "." },
+  "include": ["src", "test", "vitest.config.ts"],
+  "exclude": []
+}
