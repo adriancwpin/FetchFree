@@ -1,19 +1,32 @@
 import { Loader2, Unplug } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useDisconnect } from '@/hooks/useBank'
+import { countryName } from '@/lib/format'
 
-export function ConnectionBar({ validUntil }: { validUntil: string | null }) {
+export function ConnectionBar({
+  validUntil,
+  bank,
+}: {
+  validUntil: string | null
+  bank: { name: string; country: string } | null
+}) {
   const disconnect = useDisconnect()
+  const until = validUntil
+    ? ` until ${new Date(validUntil).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`
+    : ''
 
   return (
-    <div className="flex w-full items-center justify-between gap-4">
+    <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2">
       <p className="text-sm text-muted-foreground">
-        {validUntil
-          ? `Connected until ${new Date(validUntil).toLocaleString(undefined, {
-              dateStyle: 'medium',
-              timeStyle: 'short',
-            })}`
-          : 'Connected'}
+        Connected
+        {bank && (
+          <>
+            {' to '}
+            <span className="font-medium text-foreground">{bank.name}</span> (
+            {countryName(bank.country)})
+          </>
+        )}
+        {until}
       </p>
       <div className="flex items-center gap-3">
         {disconnect.isError && (

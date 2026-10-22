@@ -11,6 +11,7 @@ const CALLBACK_ERRORS: Record<string, string> = {
   session_failed: 'Could not complete the bank connection. Please try again.',
   missing_code: 'The bank did not return an authorization code.',
   start_failed: 'Could not start the bank login. Please try again.',
+  unknown_bank: 'That bank isn’t available. Please pick one from the list.',
   // Sent by the bank when the user cancels on its consent page.
   access_denied: 'The bank login was cancelled.',
 }
@@ -41,7 +42,7 @@ function App() {
         <p className="text-sm text-destructive">Could not reach the server: {status.error.message}</p>
       ) : status.data.connected ? (
         <>
-          <ConnectionBar validUntil={status.data.validUntil} />
+          <ConnectionBar validUntil={status.data.validUntil} bank={status.data.bank} />
           <AccountsView />
         </>
       ) : (
