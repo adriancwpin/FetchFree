@@ -84,7 +84,7 @@ function mostCommonCurrency(transactions: Transaction[]): string | null {
 }
 
 // YYYY-MM-DD plus `days`, in plain UTC date arithmetic.
-function addDays(date: string, days: number): string {
+export function addDays(date: string, days: number): string {
   const result = new Date(`${date}T00:00:00Z`)
   result.setUTCDate(result.getUTCDate() + days)
   return result.toISOString().slice(0, 10)

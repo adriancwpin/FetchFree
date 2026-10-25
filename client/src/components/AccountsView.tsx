@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -7,10 +7,11 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { CategoryBreakdown, CategoryFilterChip } from '@/components/CategoryBreakdown'
 import { SpendingSummary } from '@/components/SpendingSummary'
 import { TransactionsTable } from '@/components/TransactionsTable'
-import { useAccounts, useBalances } from '@/hooks/useBank'
+import { useAccounts, useBalances, useRefreshTransactions, useTransactions } from '@/hooks/useBank'
 import type { Account, Balance } from '@/lib/api'
 import type { CategorySelection } from '@/lib/categories'
-import { formatAmount } from '@/lib/format'
+import { formatAmount, timeAgo } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 export function AccountsView() {
   const accounts = useAccounts()
@@ -88,10 +89,13 @@ function AccountCard({ account }: { account: Account }) {
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <Button variant="ghost" size="sm" className="self-start" onClick={() => setExpanded(!expanded)}>
-          {expanded ? <ChevronDown /> : <ChevronRight />}
-          Activity
-        </Button>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setExpanded(!expanded)}>
+            {expanded ? <ChevronDown /> : <ChevronRight />}
+            Activity
+          </Button>
+          {expanded && <SyncStatus accountUid={account.uid} />}
+        </div>
         {expanded && (
           <>
             <SpendingSummary accountUid={account.uid} accountCurrency={account.currency ?? null} />
@@ -114,5 +118,46 @@ function AccountCard({ account }: { account: Account }) {
         )}
       </CardContent>
     </Card>
+  )
+}
+
+// When the saved transactions were last checked with the bank, and a button to check now.
+function SyncStatus({ accountUid }: { accountUid: string }) {
+  const transactions = useTransactions(accountUid)
+  const refresh = useRefreshTransactions(accountUid)
+  // Re-render every minute so "3 minutes ago" keeps up.
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(timer)
+  }, [])
+
+  // While loading there's nothing to say yet. After a failed load, Refresh is the way to retry.
+  if (transactions.isPending) return null
+  const data = transactions.data
+  // Only while nothing newer has arrived since the failed click (e.g. an automatic refetch).
+  const refreshFailed = refresh.isError && refresh.submittedAt > transactions.dataUpdatedAt
+
+  return (
+    <div className="flex flex-col items-end gap-0.5 text-xs text-muted-foreground">
+      <div className="flex items-center gap-1">
+        {data && <span>Updated {timeAgo(data.lastSyncedAt, now)}</span>}
+        <Button variant="ghost" size="xs" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+          <RefreshCw className={cn(refresh.isPending && 'animate-spin')} aria-hidden="true" />
+          Refresh
+        </Button>
+      </div>
+      {refreshFailed ? (
+        <p className="text-destructive" role="status">
+          Refresh failed: {refresh.error.message}
+        </p>
+      ) : (
+        data?.syncError && (
+          <p className="text-destructive" role="status">
+            Couldn't reach your bank, so these are your saved transactions.
+          </p>
+        )
+      )}
+    </div>
   )
 }

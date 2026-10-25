@@ -115,7 +115,8 @@ Browser ─GET /api/auth/status─▶ Server ─▶ DB: is there a live session?
 
 Browser ─GET /api/accounts──────▶ Server ─▶ DB: the session's account list (no bank call)
 Browser ─GET /api/accounts/:uid/balances─────▶ Server ─▶ Enable Banking
-Browser ─GET /api/accounts/:uid/transactions─▶ Server ─▶ Enable Banking (several pages)
+Browser ─GET /api/accounts/:uid/transactions─▶ Server ─▶ DB: saved copy
+                                                       └─▶ Enable Banking, only for what's new (§4.6)
 ```
 
 Details worth knowing:
@@ -174,16 +175,54 @@ counterparty name  +  payment message  +  bank's transaction type
 - **The totals always match the chart.** `countedTransactions()` in [summary.ts](../client/src/lib/summary.ts) decides which transactions count (in the window, settled, in the summary currency), and both the monthly chart and `breakdownByCategory()` use it. A test checks that the category totals equal "Money in" and "Money out".
 - **The filtered table matches the breakdown.** Clicking a category lists `transactionsFor(counted, selection)`, the same function the breakdown totals. So the rows always add up to the amount you clicked, without pending or other-currency entries.
 - **Each transaction's category is computed once** and cached per transaction object (a `WeakMap`), because the table, breakdown and filter all ask for it on every render.
-- **It runs in the browser**, like the summary: there's no stored data to categorise on the server yet.
+- **It runs in the browser**, like the summary. Transactions are now saved on the server (§4.6), but categories aren't yet; storing them comes with editing them.
 - **Adding a rule:** add a `{ category, match: /…/ }` line in the right place in `OUT_RULES` or `IN_RULES`, plus a test case in `categories.test.ts`. On the Nordea sandbox data, 97% of transactions get a real category.
 
 The UI ([CategoryBreakdown.tsx](../client/src/components/CategoryBreakdown.tsx)) ranks categories by amount, with a Spending/Income switch and a month picker. Clicking a category filters the transactions table. The bars use one colour per direction: it's one series ranked by size, so a rainbow of colours would add nothing.
+
+### 4.6 Saved transactions
+
+The server keeps a copy of every account's transactions in SQLite, so the bank is only asked for **what's new**:
+
+```
+GET /transactions
+  │
+  ├─ saved copy is under 15 minutes old, or a sync failed under 5 minutes ago (and no ?refresh=true)
+  │     └─▶ answer from the DB                                 ~0.003 s
+  │
+  └─ otherwise, sync first:
+        first time ever:          ask the bank for the 6-month window   ~3 s, many pages
+        after that:               ask from (last sync − 7 days)         ~0.5 s, usually 1 page
+                                  …or earlier, back to the oldest saved pending transaction
+        last sync was truncated:  ask from the start of the saved data again, to fill in what it missed
+        then save it, and answer from the DB
+```
+
+- **Saving = "replace the range you just fetched".** Banks don't promise every transaction a stable id, and a pending transaction changes when it's booked. So a sync doesn't match transactions one by one. In one SQL transaction it:
+  1. **deletes** the saved rows dated on or after the fetch's start date
+  2. deletes saved rows that match a fresh one: the same `entry_reference` (Enable Banking says it's unique and unchanging per account, so this catches moved dates), or an exact copy, found by an indexed **fingerprint** (a SHA-256 hash of the JSON)
+  3. **inserts** what the bank just returned
+  4. **prunes** rows older than the 6-month window, undated rows not seen in that time, and pending rows older than 89 days (the bank won't confirm those any more)
+
+  Older rows are otherwise never touched. That's the **history**: months the bank no longer returns once your login is more than a few minutes old (~90 days under PSD2).
+- **Pending transactions are always re-checked.** Each sync starts early enough to include the oldest saved pending transaction, so the bank's answer settles it: still pending (kept), booked (replaced) or gone (deleted). Pending rows are never counted in the totals anyway, only listed.
+- **Undated rows** can't be placed in a date range, so step 1 never deletes them. They're only replaced by a matching fresh copy (step 2).
+- **A truncated fetch never deletes by range.** If paging stopped early (20 pages, or a repeated `continuation_key`), the fetch is missing part of its range, so step 1 is skipped. The next sync re-fetches from the start of the saved data. If the bank won't go back that far any more, the part it couldn't re-check becomes a **gap**, and the "too many transactions" warning clears once a fetch completes.
+- **One sync per account at a time.** Requests that arrive while a sync is running wait for it (`inFlight` in transactionSync.ts) instead of starting their own.
+- **The 7-day overlap** catches transactions the bank books a few days late.
+- **Stable account key.** Account `uid`s change with every bank login, so data is saved under Enable Banking's `identification_hash` (a hash of the IBAN and currency), else the IBAN. Disconnecting and reconnecting the same bank picks the history back up. **Disconnect keeps saved transactions** on purpose.
+- **Gaps.** After a long break the bank may only go back 89 days, leaving a hole between the old saved data and the new fetch. The older history is still shown, the hole is saved as a **gap** (`gap_from`–`gap_to`), and the chart says "Some transactions from … to … may be missing". A later sync that reaches back into it fills it. Only one gap is tracked; a second one is merged with it.
+- **If the bank fails temporarily** (5xx, 429 or a timeout) while saved data exists, the page loads from the saved copy with `syncError` set, and the UI says "Couldn't reach your bank". The failure is recorded, so automatic syncs wait 5 minutes before asking again instead of waiting for a timeout on every load; Refresh still tries straight away.
+- **Other failures still come through.** A 401/403 means the consent expired or was revoked, so you need to reconnect, and saved data would hide that. With nothing saved, any error comes through as before.
+- **Same response shape as before**, plus `lastSyncedAt`, `syncError` and `gap`. That's why the summary, categories and table code didn't change. The UI shows "Updated 3 minutes ago · Refresh"; Refresh adds `?refresh=true`. A failed Refresh shows its own error until newer data arrives.
+
+Code: [server/src/transactionSync.ts](../server/src/transactionSync.ts) (when and how far back to fetch), [server/src/transactionStore.ts](../server/src/transactionStore.ts) (the SQL).
 
 ---
 
 ## 5. Data model (SQLite)
 
-All SQL lives in **two files**: [db.ts](../server/src/db.ts) and [sessionStore.ts](../server/src/sessionStore.ts). Switching to Postgres later means rewriting just those two.
+All SQL lives in **three files**: [db.ts](../server/src/db.ts), [sessionStore.ts](../server/src/sessionStore.ts) and [transactionStore.ts](../server/src/transactionStore.ts). Switching to Postgres later means rewriting just those.
 
 ```
 pending_auths                       bank_sessions
@@ -194,6 +233,18 @@ aspsp_name    TEXT  (bank)          valid_until   TEXT  (ISO date)
 aspsp_country TEXT                  created_at    TEXT
                                     aspsp_name    TEXT  (bank)
                                     aspsp_country TEXT
+
+transactions                        account_syncs
+─────────────────────────           ─────────────────────────────
+account_key     TEXT                account_key    TEXT  PK
+date            TEXT  (YYYY-MM-DD)  covered_from   TEXT  (saved data starts)
+status          TEXT  (BOOK, PDNG…) gap_from       TEXT  (nothing saved from…
+entry_reference TEXT                gap_to         TEXT   …until, exclusive)
+fingerprint     TEXT  (hash of data) last_synced_at TEXT (ISO time)
+saved_at        TEXT  (ISO time)    truncated      INTEGER (0/1)
+data            TEXT  (bank's JSON)
+                                    last_error     TEXT  (latest attempt failed)
+                                    last_failed_at TEXT
 ```
 
 - **`pending_auths`** holds logins that have started but not finished. A row is deleted when its callback arrives, or after 15 minutes.
@@ -201,7 +252,10 @@ aspsp_country TEXT                  created_at    TEXT
 - Dates are stored as ISO strings (`2026-11-01T13:00:00.000Z`). They're always written in that exact format, so comparing them as **text** gives the right order.
 - **Migrations.** When a new version adds columns, `addColumnIfMissing()` adds them to an existing database without losing rows.
 
-Balances and transactions are **not stored**. They're fetched live each time and cached for 5 minutes in the browser.
+- **`transactions`** keeps each transaction exactly as the bank sent it (`data`), plus the few columns needed to find and replace it. `account_key` is the stable account id from §4.6, not the per-login `uid`.
+- **`account_syncs`** has one row per account: when it was last synced, where the saved copy starts, any gap, and whether the latest attempt failed.
+
+Balances are **not stored**. They're fetched live and cached for 5 minutes in the browser.
 
 ---
 
@@ -215,7 +269,7 @@ Balances and transactions are **not stored**. They're fetched live each time and
 | `GET /api/banks?country=FI` | Banks in that country (name, logo, beta) |
 | `GET /api/accounts` | The connected accounts |
 | `GET /api/accounts/:uid/balances` | Balances for one account |
-| `GET /api/accounts/:uid/transactions` | `{ transactions, dateFrom, dateTo, truncated }` |
+| `GET /api/accounts/:uid/transactions` | `{ transactions, dateFrom, dateTo, truncated, lastSyncedAt, syncError, gap }` from the saved copy; `?refresh=true` checks with the bank first |
 | `GET /login?bank=…&country=…` | *Browser navigation*, not fetch: starts a bank login |
 | `GET /callback?code=…&state=…` | *The bank redirects here* after you approve |
 
@@ -246,6 +300,8 @@ Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable
 - **Caching:**
   - In the browser, bank data is fresh for **5 minutes** and isn't refetched on every tab switch.
   - On the server, the bank list is cached for **1 hour**, and a failed fetch is not cached.
+  - Transactions are saved in SQLite and re-synced with the bank after **15 minutes**, or on Refresh (§4.6).
+- **Bank down.** Saved transactions are still shown, with a "Couldn't reach your bank" note.
 - **Restarts.** Logins in progress and the connection are in SQLite, so saving a file (which restarts the dev server) doesn't log you out.
 
 ---
@@ -259,6 +315,7 @@ Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable
 | Summary maths in the browser | Uses data already fetched, with no extra server code or storage. | Recomputed on each render (cheap at this size). |
 | No chart library | Smaller app, and full control over accessibility and colours. | Fancier charts would mean more hand-written code. |
 | One bank connection at a time | Simple data model and simple UI. | You can't see two banks at once yet. |
+| Saved transactions: replace the fetched range, don't match one by one | Works even when a bank sends no ids, and pending → booked needs no special case. | Each sync rewrites the last week or so of rows (cheap). |
 | Login starts on the server (`/login`) | The cookie lands on the same host as `/callback`, so the CSRF protection works reliably. | The client needs `loginUrl` from `/status`. |
 
 ---
@@ -267,8 +324,8 @@ Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable
 
 1. **No users or login.** It's one shared connection, and safe only because the server is loopback-only.
 2. **No UI tests.** The logic is covered by automated tests (§11), but the React components aren't.
-3. **Transactions aren't stored**, so there's no history beyond what the bank returns.
-4. **Categories are automatic only.** You can't change a transaction's category or add your own rules from the app yet; that needs stored transactions. There's no search or weekly view either.
+3. **Saved transactions are kept for 6 months and only deleted by age.** Disconnect keeps them (on purpose, see §4.6). An account you never reconnect keeps its last 6 months until you delete `server/data/`, and there's no "delete my data" button yet.
+4. **Categories are automatic only.** You can't change a transaction's category or add your own rules from the app yet. Now that transactions are saved, that's the natural next step. There's no search or weekly view either.
 5. If the bank revokes a session from its side, the app shows errors until you click Disconnect.
 
 ---
@@ -283,7 +340,8 @@ Run `npm test` in `server/` and in `client/`. GitHub Actions runs both on every 
 | `server/src/db.migration.test.ts` | An old-format database gains the new columns and keeps its session | A temporary database file with the old schema |
 | `server/src/enableBankingClient.test.ts` | Timeouts, error pages, paging, the 89-day fallback rules, PSU headers, consent clamp | `fetch` replaced by a fake Enable Banking (`test/fakeBank.ts`) |
 | `server/src/bankDirectory.test.ts` | Caching, failures not cached, bank lookup | Fake Enable Banking |
-| `server/src/routes.test.ts` | The whole HTTP flow: `/login` guard, `/callback` state and cookie checks, account guard, error handling | supertest calls `app` directly, without a real server |
+| `server/src/transactionStore.test.ts` | Replacing a range keeps older rows, pending → booked, unconfirmable pending dropped, moved dates, undated rows, truncated fetches never delete, pruning, gaps opening, filling and unchecked repairs, failures recorded | In-memory SQLite |
+| `server/src/routes.test.ts` | The whole HTTP flow: `/login` guard, `/callback` state and cookie checks, account guard, error handling; saved transactions (no bank call while fresh, 7-day refresh, bank down and its 5-minute wait, 401/403 passed through, re-fetch after truncation and its unchecked part, reaching back to pending, one shared fetch for overlapping requests, gap after a long break and clipped to the window, history kept across reconnects) | supertest calls `app` directly, without a real server |
 | `client/src/lib/*.test.ts` | Summary maths, categories (real Nordea examples, totals match the chart), formatting, API error and retry rules | `fetch` replaced in the API tests |
 
 `server/test/setup.ts` runs before every server test file. It generates a throwaway private key and sets the environment variables, so tests never read your real `.env`, key or database.
@@ -335,7 +393,7 @@ Computers store decimals approximately: <code>0.1 + 0.2</code> isn't exactly <co
 </details>
 
 <details><summary>6. You switch to Postgres. Which files must change?</summary>
-<code>server/src/db.ts</code> and <code>server/src/sessionStore.ts</code>. All SQL is isolated there on purpose.
+<code>server/src/db.ts</code>, <code>server/src/sessionStore.ts</code> and <code>server/src/transactionStore.ts</code>. All SQL is isolated there on purpose.
 </details>
 
 <details><summary>7. Why does the server listen only on loopback, and what would you need before changing that?</summary>
@@ -344,4 +402,12 @@ The API has no user login, so anyone who can reach it can read the bank data. Be
 
 <details><summary>8. A transaction has status <code>PDNG</code>. Is it in the chart? In the table?</summary>
 Not in the chart, where it's counted under "not settled yet". Yes in the table, with a "Pending" badge.
+</details>
+
+<details><summary>9. A card payment is saved as pending on Monday and booked on Wednesday. Why doesn't it show up twice after the next sync?</summary>
+Each sync starts no later than the oldest saved pending transaction, so Monday is inside the range it fetches. Everything saved from that date on is deleted before the bank's fresh copy is inserted, so the pending row is removed and only the booked version goes back in. If the bank also sends the same <code>entry_reference</code> for both, that replaces it too, even when the dates differ.
+</details>
+
+<details><summary>10. Why are saved transactions filed under <code>identification_hash</code> and not the account <code>uid</code>?</summary>
+The <code>uid</code> is new with every bank login. The hash comes from the account's IBAN and currency, so it stays the same after reconnecting, and the saved history is found again.
 </details>

@@ -26,7 +26,7 @@ function summarize(
   accountCurrency?: string | null,
 ) {
   return summarizeByMonth(
-    { transactions, dateFrom: '2026-05-01', dateTo: '2026-10-22', truncated: false, ...window },
+    { transactions, dateFrom: '2026-05-01', dateTo: '2026-10-22', truncated: false, lastSyncedAt: '2026-10-22T12:00:00.000Z', syncError: null, gap: null, ...window },
     accountCurrency,
   )
 }

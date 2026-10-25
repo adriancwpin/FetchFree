@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useTransactions } from '@/hooks/useBank'
 import { formatAmount, monthLabel } from '@/lib/format'
-import { summarizeByMonth, type MonthSummary } from '@/lib/summary'
+import { addDays, summarizeByMonth, type MonthSummary } from '@/lib/summary'
 import { cn } from '@/lib/utils'
 
 const CHART_HEIGHT_PX = 160
@@ -22,7 +22,6 @@ function longDate(date: string): string {
   const [year, month, day] = date.split('-').map(Number)
   return new Date(year ?? 0, (month ?? 1) - 1, day ?? 1).toLocaleDateString(undefined, { dateStyle: 'medium' })
 }
-
 
 function formatCompact(value: number, currency: string): string {
   try {
@@ -163,6 +162,14 @@ export function SpendingSummary({
             {note}
           </p>
         ))}
+        {transactions.data.gap && (
+          <p className="text-xs text-muted-foreground">
+            Some transactions from {longDate(transactions.data.gap.from)} to{' '}
+            {/* `to` is the first day after the gap. */}
+            {longDate(addDays(transactions.data.gap.to, -1))} may be missing: your bank no longer returns that
+            period, so those months may look lower than they really were.
+          </p>
+        )}
         {transactions.data.truncated && (
           <p className="text-xs text-muted-foreground">
             This account has too many transactions to load in full, so the earliest months may be incomplete.

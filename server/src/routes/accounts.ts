@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express'
 import * as enableBanking from '../enableBankingClient.js'
 import { sessionStore } from '../sessionStore.js'
+import { getAccountTransactions, type SessionAccount } from '../transactionSync.js'
 
 export const accountsRouter = Router()
 
@@ -25,14 +26,15 @@ function psuHeaders(req: Request): enableBanking.PsuHeaders {
   return headers
 }
 
-// Only proxy accounts that belong to the current session.
+// Only proxy accounts that belong to the current session. The account is passed on in res.locals.
 function requireSessionAccount(req: Request, res: Response, next: NextFunction): void {
   const session = sessionStore.getCurrentSession()
-  const owned = session?.accounts.some((account) => account.uid === req.params.accountUid)
-  if (!owned) {
+  const account = session?.accounts.find((candidate) => candidate.uid === req.params.accountUid)
+  if (!account) {
     res.status(404).json({ error: 'Unknown account' })
     return
   }
+  res.locals.account = account
   next()
 }
 
@@ -41,25 +43,9 @@ accountsRouter.get('/:accountUid/balances', requireSessionAccount, async (req, r
   res.json(balances)
 })
 
-// Months of history to fetch, including the current month. The response reports the window
-// actually used, so the client never needs its own copy of this.
-const HISTORY_MONTHS = 6
-// Many banks only allow ~90 days of history once the login is a few minutes old (PSD2).
-const FALLBACK_HISTORY_DAYS = 89
-
-function toDateString(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
-
+// Served from the saved copy; the bank is only asked for what's new (see transactionSync.ts).
+// ?refresh=true asks the bank even if the saved copy is recent.
 accountsRouter.get('/:accountUid/transactions', requireSessionAccount, async (req, res) => {
-  const now = new Date()
-  const result = await enableBanking.getTransactions(
-    req.params.accountUid as string,
-    toDateString(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (HISTORY_MONTHS - 1), 1))),
-    toDateString(new Date(now.getTime() - FALLBACK_HISTORY_DAYS * 24 * 60 * 60 * 1000)),
-    psuHeaders(req),
-  )
-  // dateTo is the server's UTC date. The client treats it as a minimum end, not a cut-off,
-  // because a user ahead of UTC can already have transactions dated "tomorrow".
-  res.json({ ...result, dateTo: toDateString(now) })
+  const account = res.locals.account as SessionAccount
+  res.json(await getAccountTransactions(account, psuHeaders(req), { refresh: req.query.refresh === 'true' }))
 })
