@@ -132,14 +132,18 @@ accountsRouter.delete('/:accountUid/budgets/:category', requireSessionAccount, (
 })
 
 // Category rules: the user's own category for everything from one payee (see categoryRuleStore.ts).
-// The payee is free text, so it goes in the JSON body rather than the URL. Like budgets, they stay
-// editable once the bank connection has ended.
+// The payee is free text, so a new rule goes in the JSON body; the one to remove is named in the
+// query string (properly encoded), since proxies don't reliably pass on a DELETE body. Like
+// budgets, they stay editable once the bank connection has ended.
 const MAX_PAYEE_LENGTH = 200
+// Far more payees than an account has in 6 months, but a limit on what one caller can store.
+export const MAX_CATEGORY_RULES = 1000
 
-// The rule's direction and payee from a request body, or a message saying what's wrong with them.
-// The payee is trimmed, as the client's keys are, so " alepa " and "alepa" are the same rule.
-function parseRuleTarget(body: unknown): { direction: Direction; payee: string } | { error: string } {
-  const { direction, payee } = (body ?? {}) as { direction?: unknown; payee?: unknown }
+// The rule's direction and payee from a request body or query, or a message saying what's wrong
+// with them. The payee is trimmed, as the client's keys are, so " alepa " and "alepa" are the
+// same rule.
+function parseRuleTarget(input: unknown): { direction: Direction; payee: string } | { error: string } {
+  const { direction, payee } = (input ?? {}) as { direction?: unknown; payee?: unknown }
   if (direction !== 'in' && direction !== 'out') return { error: 'direction must be "in" or "out"' }
   const trimmed = typeof payee === 'string' ? payee.trim() : ''
   if (trimmed === '' || trimmed.length > MAX_PAYEE_LENGTH) {
@@ -163,11 +167,20 @@ accountsRouter.put('/:accountUid/category-rules', requireSessionAccount, (req, r
     res.status(400).json({ error: 'Unknown category' })
     return
   }
-  res.json(categoryRuleStore.set(storageKey(res), { ...target, category }))
+  const key = storageKey(res)
+  // Changing an existing rule is always allowed; only adding one counts against the limit.
+  if (
+    !categoryRuleStore.has(key, target.direction, target.payee) &&
+    categoryRuleStore.count(key) >= MAX_CATEGORY_RULES
+  ) {
+    res.status(409).json({ error: `You can have at most ${MAX_CATEGORY_RULES} category rules; reset some first` })
+    return
+  }
+  res.json(categoryRuleStore.set(key, { ...target, category }))
 })
 
 accountsRouter.delete('/:accountUid/category-rules', requireSessionAccount, (req, res) => {
-  const target = parseRuleTarget(req.body)
+  const target = parseRuleTarget(req.query)
   if ('error' in target) {
     res.status(400).json({ error: target.error })
     return

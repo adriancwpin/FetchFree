@@ -4,8 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { config } from './config.js'
 
 // All SQL lives here and in the stores (sessionStore.ts, transactionStore.ts, budgetStore.ts,
-// categoryRuleStore.ts), so
-// moving to Postgres later only touches these files.
+// categoryRuleStore.ts), so moving to Postgres later only touches these files.
 
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true })
 

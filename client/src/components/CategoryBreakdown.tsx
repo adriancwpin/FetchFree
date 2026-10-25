@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useCategoryRules, useTransactions } from '@/hooks/useBank'
 import { breakdownByCategory, CATEGORIES, type CategorySelection, type Direction } from '@/lib/categories'
 import { formatAmount, monthLabel } from '@/lib/format'
@@ -48,8 +49,10 @@ export function CategoryBreakdown({
     if (selectedMissing) onSelectionChange({ ...selection, category: undefined })
   }, [selectedMissing, selection, onSelectionChange])
 
-  // Loading, errors and "no transactions" are shown by the table below.
-  if (!counted?.currency || counted.transactions.length === 0 || rules.isPending) return null
+  // Loading, errors and "no transactions" are shown by the table below. Waits for the user's own
+  // categories, which decide each category's total.
+  if (!counted?.currency || counted.transactions.length === 0) return null
+  if (rules.isPending) return <Skeleton className="h-24 w-full" />
   const { currency } = counted
 
   const largest = rows[0]?.amount ?? 0

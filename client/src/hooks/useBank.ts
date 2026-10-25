@@ -1,6 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as api from '@/lib/api'
-import { type CategoryRules, ruleMap } from '@/lib/categories'
+import { ruleMap } from '@/lib/categories'
 
 // Bank data changes slowly and every fetch is a call to the bank (some limit how often apps may
 // read an account), so don't refetch it on every tab switch.
@@ -69,20 +69,41 @@ export function useTransactions(accountUid: string) {
   })
 }
 
-// Budgets live on our server, not the bank, so they're cheap to read and change.
-export function useBudgets(accountUid: string) {
-  return useQuery({ queryKey: ['accounts', accountUid, 'budgets'], queryFn: () => api.getBudgets(accountUid) })
+// Saving or removing a budget or category rule writes the result straight into the cached list,
+// so it changes without a refetch. First any fetch of the list still on its way is cancelled: it
+// may have left before the save, and its older answer would otherwise overwrite it. If there's no
+// list to update (it never loaded, e.g. it failed), the whole list is fetched instead, since
+// writing just this one entry would hide all the others.
+export async function updateCachedList<T>(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  update: (list: T[]) => T[],
+): Promise<void> {
+  await queryClient.cancelQueries({ queryKey, exact: true })
+  if (queryClient.getQueryData<T[]>(queryKey) === undefined) {
+    await queryClient.invalidateQueries({ queryKey, exact: true })
+    return
+  }
+  queryClient.setQueryData<T[]>(queryKey, (list) => list && update(list))
 }
 
-// Saving and removing budgets update the cached list directly, so it changes without a refetch.
+// Budgets and category rules live on our server, not the bank, so they're cheap to read: unlike
+// bank data they use the default refetching (on mount and when the tab regains focus), which keeps
+// two open tabs in step.
+const budgetsKey = (accountUid: string) => ['accounts', accountUid, 'budgets'] as const
+
+export function useBudgets(accountUid: string) {
+  return useQuery({ queryKey: budgetsKey(accountUid), queryFn: () => api.getBudgets(accountUid) })
+}
+
 export function useSetBudget(accountUid: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ category, amount }: { category: string; amount: number }) =>
       api.setBudget(accountUid, category, amount),
     onSuccess: (saved) =>
-      queryClient.setQueryData(['accounts', accountUid, 'budgets'], (budgets: api.Budget[] | undefined) => [
-        ...(budgets ?? []).filter((budget) => budget.category !== saved.category),
+      updateCachedList<api.Budget>(queryClient, budgetsKey(accountUid), (budgets) => [
+        ...budgets.filter((budget) => budget.category !== saved.category),
         saved,
       ]),
   })
@@ -93,37 +114,36 @@ export function useDeleteBudget(accountUid: string) {
   return useMutation({
     mutationFn: (category: string) => api.deleteBudget(accountUid, category),
     onSuccess: (_result, category) =>
-      queryClient.setQueryData(['accounts', accountUid, 'budgets'], (budgets: api.Budget[] | undefined) =>
-        (budgets ?? []).filter((budget) => budget.category !== category),
+      updateCachedList<api.Budget>(queryClient, budgetsKey(accountUid), (budgets) =>
+        budgets.filter((budget) => budget.category !== category),
       ),
   })
 }
 
+const categoryRulesKey = (accountUid: string) => ['accounts', accountUid, 'categoryRules'] as const
+
 // The user's own categories, ready for categorize(). The cache keeps the server's list (which the
 // mutations below update); `select` turns it into a CategoryRules map once per change of that list,
-// shared by every component that asks. Components wait while this is pending, so categories don't
-// jump once it arrives. If it fails they show the automatic categories, and the account card says so.
+// shared by every component that asks.
 export function useCategoryRules(accountUid: string) {
   return useQuery({
-    queryKey: ['accounts', accountUid, 'categoryRules'],
+    queryKey: categoryRulesKey(accountUid),
     queryFn: () => api.getCategoryRules(accountUid),
-    select: toCategoryRules,
+    select: ruleMap,
   })
 }
 
-const toCategoryRules = (rules: api.CategoryRule[]): CategoryRules => ruleMap(rules)
+type RuleTarget = Pick<api.CategoryRule, 'direction' | 'payee'>
 
-const sameTarget = (a: api.CategoryRule, b: Pick<api.CategoryRule, 'direction' | 'payee'>) =>
-  a.direction === b.direction && a.payee === b.payee
+const sameTarget = (a: RuleTarget, b: RuleTarget) => a.direction === b.direction && a.payee === b.payee
 
-// Like budgets, saving and removing a rule update the cached list directly.
 export function useSetCategoryRule(accountUid: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (rule: api.CategoryRule) => api.setCategoryRule(accountUid, rule),
     onSuccess: (saved) =>
-      queryClient.setQueryData(['accounts', accountUid, 'categoryRules'], (rules: api.CategoryRule[] | undefined) => [
-        ...(rules ?? []).filter((rule) => !sameTarget(rule, saved)),
+      updateCachedList<api.CategoryRule>(queryClient, categoryRulesKey(accountUid), (rules) => [
+        ...rules.filter((rule) => !sameTarget(rule, saved)),
         saved,
       ]),
   })
@@ -132,10 +152,10 @@ export function useSetCategoryRule(accountUid: string) {
 export function useDeleteCategoryRule(accountUid: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (target: Pick<api.CategoryRule, 'direction' | 'payee'>) => api.deleteCategoryRule(accountUid, target),
+    mutationFn: (target: RuleTarget) => api.deleteCategoryRule(accountUid, target),
     onSuccess: (_result, target) =>
-      queryClient.setQueryData(['accounts', accountUid, 'categoryRules'], (rules: api.CategoryRule[] | undefined) =>
-        (rules ?? []).filter((rule) => !sameTarget(rule, target)),
+      updateCachedList<api.CategoryRule>(queryClient, categoryRulesKey(accountUid), (rules) =>
+        rules.filter((rule) => !sameTarget(rule, target)),
       ),
   })
 }

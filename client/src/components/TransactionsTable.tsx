@@ -12,8 +12,10 @@ import {
   categorize,
   describe,
   type Payee,
+  payeeId,
   payeeOf,
   ruleFor,
+  samePayee,
   transactionsFor,
 } from '@/lib/categories'
 import { formatUnsignedAmount } from '@/lib/format'
@@ -41,10 +43,6 @@ function newestFirst(transactions: Transaction[]): Transaction[] {
   return [...transactions].sort((a, b) => (dateOf(b) ?? '').localeCompare(dateOf(a) ?? ''))
 }
 
-function payeeId(payee: Payee): string {
-  return `${payee.direction}:${payee.key}`
-}
-
 // Identifies a row across refetches, which replace every transaction object. Not unique (the bank
 // may send no reference); it only decides which of a payee's rows the editor sits under.
 function rowId(transaction: Transaction): string {
@@ -55,7 +53,7 @@ function rowId(transaction: Transaction): string {
 function countFrom(transactions: Transaction[], payee: Payee): number {
   return transactions.filter((transaction) => {
     const other = payeeOf(transaction)
-    return other !== null && payeeId(other) === payeeId(payee)
+    return other !== null && samePayee(other, payee)
   }).length
 }
 
@@ -73,9 +71,9 @@ export function TransactionsTable({
 }) {
   const transactions = useTransactions(accountUid)
   const rules = useCategoryRules(accountUid)
-  // Whose category is being changed, and from which row. Kept as text rather than the transaction
-  // object, so a refetch (e.g. Refresh) doesn't close the editor.
-  const [editing, setEditing] = useState<{ payee: string; row: string } | null>(null)
+  // Whose category is being changed, and from which row. Kept by payee and rowId rather than the
+  // transaction object, so a refetch (e.g. Refresh) doesn't close the editor.
+  const [editing, setEditing] = useState<{ payee: Payee; row: string } | null>(null)
   const rows = useMemo(() => {
     if (!transactions.data) return []
     const visible = selection?.category
@@ -88,12 +86,12 @@ export function TransactionsTable({
   // transaction was booked) the first one from the same payee. None closes it.
   const editorIndex = useMemo(() => {
     if (!editing) return -1
-    const samePayee = (transaction: Transaction) => {
+    const fromPayee = (transaction: Transaction) => {
       const payee = payeeOf(transaction)
-      return payee !== null && payeeId(payee) === editing.payee
+      return payee !== null && samePayee(payee, editing.payee)
     }
-    const opened = rows.findIndex((transaction) => samePayee(transaction) && rowId(transaction) === editing.row)
-    return opened !== -1 ? opened : rows.findIndex(samePayee)
+    const opened = rows.findIndex((transaction) => fromPayee(transaction) && rowId(transaction) === editing.row)
+    return opened !== -1 ? opened : rows.findIndex(fromPayee)
   }, [rows, editing])
 
   // Once none of the payee's rows are shown (e.g. a different filter), close the editor for good,
@@ -103,8 +101,9 @@ export function TransactionsTable({
     if (editorGone) setEditing(null)
   }, [editorGone])
 
-  // Waits for the user's own categories too, so they don't change under the user once loaded.
-  if (transactions.isPending || rules.isPending) {
+  // The rows don't wait for the user's own categories; only each row's category does (below). A
+  // table filtered to one category does wait, since which rows are in it depends on them.
+  if (transactions.isPending || (selection?.category && rules.isPending)) {
     return <Skeleton className="h-32 w-full" />
   }
   if (transactions.isError) {
@@ -129,7 +128,7 @@ export function TransactionsTable({
     const rule = ruleFor(transaction, rules.data)
     const category = rule ?? categorize(transaction)
     const { label: categoryLabel, icon: CategoryIcon } = CATEGORIES[category]
-    const editorHere = index === editorIndex && payee !== null
+    const editorHere = index === editorIndex && payee !== null && !rules.isPending
     body.push(
       // entry_reference isn't guaranteed unique across pages, so the index keeps keys distinct.
       <TableRow key={`${transaction.entry_reference ?? ''}-${index}`}>
@@ -141,10 +140,12 @@ export function TransactionsTable({
             <span className="truncate">{describe(transaction) ?? '—'}</span>
             {statusLabel && <Badge variant="outline">{statusLabel}</Badge>}
           </div>
-          {payee ? (
+          {rules.isPending ? (
+            <Skeleton className="mt-1 h-3 w-24" />
+          ) : payee ? (
             <button
               type="button"
-              onClick={() => setEditing(editorHere ? null : { payee: payeeId(payee), row: rowId(transaction) })}
+              onClick={() => setEditing(editorHere ? null : { payee, row: rowId(transaction) })}
               aria-expanded={editorHere}
               aria-label={`Category: ${categoryLabel}${rule ? ', set by you' : ''}. Change it for ${payee.label}`}
               className="mt-0.5 -ml-1 flex items-center gap-1 rounded px-1 text-xs text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
@@ -218,6 +219,13 @@ function CategoryEditor({
   const setRule = useSetCategoryRule(accountUid)
   const deleteRule = useDeleteCategoryRule(accountUid)
   const [category, setCategory] = useState<CategoryId>(current)
+  // If the payee's category changes while this is open (e.g. a refetch brings a change made in
+  // another tab), show the new one, so Save never writes back a category that's out of date.
+  const [shownFor, setShownFor] = useState<CategoryId>(current)
+  if (current !== shownFor) {
+    setShownFor(current)
+    setCategory(current)
+  }
   const options = (Object.keys(CATEGORIES) as CategoryId[]).filter(
     (id) => CATEGORIES[id].direction === payee.direction,
   )
@@ -276,9 +284,9 @@ function CategoryEditor({
           </>
         ) : (
           <>
-            Applies to {which} with a message like{' '}
-            <span className="font-medium text-foreground">{payee.label}</span> (numbers and punctuation ignored), and
-            future ones like it.
+            Applies to {which} with the message{' '}
+            <span className="font-medium text-foreground">{payee.label}</span>, and future ones with exactly the same
+            message (there's no name to go by).
           </>
         )}
       </p>

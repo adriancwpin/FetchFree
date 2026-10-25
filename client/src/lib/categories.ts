@@ -209,11 +209,12 @@ export function describe(transaction: Transaction): string | null {
 // The server refuses longer payees (MAX_PAYEE_LENGTH in server/src/routes/accounts.ts).
 export const MAX_PAYEE_KEY_LENGTH = 200
 
-// What the user's rules match a transaction on. `key` ignores case, accents and spacing, so
-// "ALEPA  Kamppi" and "Alepa Kamppi" are one payee. A payment message often carries a reference,
-// date or invoice number that changes every time ("LAPSILISA 10/2026 REF 12345"), so a message is
-// matched on its words alone ("lapsilisa ref"); a name is matched as it is. Null when there's
-// nothing to match on, e.g. a message that is only a reference number.
+// What the user's rules match a transaction on: its name, or its whole message when there's no
+// name. `key` ignores case, accents and spacing, so "ALEPA  Kamppi" and "Alepa Kamppi" are one
+// payee. Nothing else is dropped: a message's numbers are often what tells two senders apart
+// ("REF 12345" and "REF 98765"), so a message rule only matches that exact message, and the editor
+// says so. Keys are cut to what the server accepts; two messages the same for 200 characters are
+// taken to be the same payment. Null when there's no text at all.
 export interface Payee {
   direction: Direction
   source: 'name' | 'message'
@@ -221,10 +222,9 @@ export interface Payee {
   label: string
 }
 
-function payeeKey(source: Payee['source'], label: string): string {
-  const text = source === 'message' ? normalise(label).replace(/[^\p{L}\s]/gu, ' ') : normalise(label)
+function payeeKey(label: string): string {
   return (
-    text
+    normalise(label)
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, MAX_PAYEE_KEY_LENGTH)
@@ -239,7 +239,7 @@ const payeeCache = new WeakMap<Transaction, Payee | null>()
 function computePayee(transaction: Transaction): Payee | null {
   const parts = describeParts(transaction)
   if (!parts) return null
-  const key = payeeKey(parts.source, parts.label)
+  const key = payeeKey(parts.label)
   return key ? { ...parts, key } : null
 }
 
@@ -252,12 +252,21 @@ export function payeeOf(transaction: Transaction): Payee | null {
   return payee
 }
 
-// The user's own categories: "out:alepa kamppi" → eatingOut. Built from the server's list by
-// ruleMap, which drops rules this client can't apply.
+export function samePayee(a: Payee, b: Payee): boolean {
+  return a.direction === b.direction && a.key === b.key
+}
+
+// The user's own categories, by payeeId: "out:alepa kamppi" → eatingOut. Built from the server's
+// list by ruleMap, which drops rules this client can't apply.
 export type CategoryRules = ReadonlyMap<string, CategoryId>
 
 function ruleKey(direction: Direction, payee: string): string {
   return `${direction}:${payee}`
+}
+
+// One payee as text, e.g. for React keys: the same string CategoryRules is keyed by.
+export function payeeId(payee: Payee): string {
+  return ruleKey(payee.direction, payee.key)
 }
 
 // Rules for an unknown category, or one from the other direction, are ignored: a rule can change
@@ -275,7 +284,7 @@ export function ruleMap(rules: readonly CategoryRule[]): CategoryRules {
 // The user's category for this transaction's payee, if they set one.
 export function ruleFor(transaction: Transaction, rules: CategoryRules | undefined): CategoryId | undefined {
   const payee = rules?.size ? payeeOf(transaction) : null
-  return payee ? rules?.get(ruleKey(payee.direction, payee.key)) : undefined
+  return payee ? rules?.get(payeeId(payee)) : undefined
 }
 
 export function categorize(transaction: Transaction, rules?: CategoryRules): CategoryId {

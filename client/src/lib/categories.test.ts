@@ -7,9 +7,11 @@ import {
   type CategoryId,
   describe as describeTransaction,
   MAX_PAYEE_KEY_LENGTH,
+  payeeId,
   payeeOf,
   ruleMap,
   RULES,
+  samePayee,
   transactionsFor,
 } from '@/lib/categories'
 import { countedTransactions, summarizeByMonth } from '@/lib/summary'
@@ -252,11 +254,20 @@ describe('your own categories (rules per payee)', () => {
     })
   })
 
-  it('matches a payment message on its words alone, so changing references still match', () => {
-    const october = payeeOf(tx({ direction: 'in', message: 'LAPSILISA 10/2026 REF 12345' }))
-    const november = payeeOf(tx({ direction: 'in', message: 'Lapsilisä 11/2026 ref 12399' }))
-    expect(october).toMatchObject({ source: 'message', key: 'lapsilisa ref' })
-    expect(november?.key).toBe(october?.key)
+  it('matches a payment message exactly (apart from case, accents and spacing), numbers included', () => {
+    const payee = payeeOf(tx({ direction: 'in', message: 'LAPSILISÄ  10/2026' }))
+    expect(payee).toMatchObject({ source: 'message', key: 'lapsilisa 10/2026' })
+    expect(payeeOf(tx({ direction: 'in', message: 'Lapsilisa 10/2026' }))?.key).toBe(payee?.key)
+  })
+
+  it('keeps payments that differ only in their numbers apart, so one rule never moves the other', () => {
+    const first = payeeOf(tx({ direction: 'out', message: 'REF 12345' }))
+    const second = payeeOf(tx({ direction: 'out', message: 'REF 98765' }))
+    expect(first?.key).not.toBe(second?.key)
+
+    const rules = ruleMap([{ direction: 'out', payee: first!.key, category: 'groceries' }])
+    expect(categorize(tx({ direction: 'out', message: 'REF 12345' }), rules)).toBe('groceries')
+    expect(categorize(tx({ direction: 'out', message: 'REF 98765' }), rules)).toBe('otherOut')
   })
 
   it('falls back to the message when the name is blank', () => {
@@ -265,11 +276,18 @@ describe('your own categories (rules per payee)', () => {
     expect(describeTransaction(blankName)).toBe('Vuokra lokakuu')
   })
 
-  it('has no payee when there is nothing to match on, but still describes a numbers-only message', () => {
+  it('has no payee or description when there is no text at all', () => {
     expect(payeeOf(tx({ direction: 'out' }))).toBeNull()
     expect(describeTransaction(tx({ direction: 'out' }))).toBeNull()
-    expect(payeeOf(tx({ direction: 'out', message: '18110005577890' }))).toBeNull()
-    expect(describeTransaction(tx({ direction: 'out', message: '18110005577890' }))).toBe('18110005577890')
+    expect(payeeOf({ ...tx({ direction: 'out', message: '   ' }), creditor: { name: '' } })).toBeNull()
+  })
+
+  it('tells payees apart by direction', () => {
+    const paid = payeeOf(tx({ direction: 'out', counterparty: 'Salo Johanna' }))!
+    const received = payeeOf(tx({ direction: 'in', counterparty: 'Salo Johanna' }))!
+    expect(samePayee(paid, received)).toBe(false)
+    expect(samePayee(paid, payeeOf(tx({ direction: 'out', counterparty: 'SALO  johanna' }))!)).toBe(true)
+    expect(payeeId(paid)).toBe('out:salo johanna')
   })
 
   it('keeps keys within what the server accepts, without splitting a character', () => {

@@ -118,7 +118,7 @@ describe('bankLoginHref', () => {
 })
 
 describe('category rules', () => {
-  it('sends the payee in the JSON body, not the URL', async () => {
+  it('sends a new rule in the JSON body, and names the one to remove in the query string', async () => {
     const rule = { direction: 'out' as const, payee: 'alepa / kamppi?', category: 'eatingOut' }
     const fetchSpy = vi.fn(async (_path: string, init?: RequestInit) =>
       init?.method === 'DELETE' ? new Response(null, { status: 204 }) : new Response(JSON.stringify(rule)),
@@ -130,7 +130,7 @@ describe('category rules', () => {
 
     expect(fetchSpy.mock.calls.map(([path, init]) => [path, init?.method, init?.body])).toEqual([
       ['/api/accounts/acc%201/category-rules', 'PUT', JSON.stringify(rule)],
-      ['/api/accounts/acc%201/category-rules', 'DELETE', JSON.stringify({ direction: 'out', payee: 'alepa / kamppi?' })],
+      ['/api/accounts/acc%201/category-rules?direction=out&payee=alepa+%2F+kamppi%3F', 'DELETE', undefined],
     ])
   })
 
