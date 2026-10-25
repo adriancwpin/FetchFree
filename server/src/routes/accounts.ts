@@ -52,15 +52,22 @@ function sessionOf(res: Response): LatestSession {
   return res.locals.session as LatestSession
 }
 
-// Balances are only ever live from the bank, so there's nothing to show once the session has ended.
-accountsRouter.get('/:accountUid/balances', requireSessionAccount, async (req, res) => {
+// Every route that asks the bank goes through this. An ended session never reaches the bank, and a
+// refusal from the bank is checked with Enable Banking, so the client learns the connection has
+// ended (SESSION_ENDED) whichever route notices first.
+async function callBank<T>(res: Response, call: () => Promise<T>): Promise<T> {
   const session = sessionOf(res)
   if (session.ended) throw new SessionEndedError()
   try {
-    res.json(await enableBanking.getBalances(req.params.accountUid as string, psuHeaders(req)))
+    return await call()
   } catch (err) {
-    await confirmEnded(session.sessionId, err)
+    return confirmEnded(session.sessionId, err)
   }
+}
+
+// Balances are only ever live from the bank, so there's nothing to show once the session has ended.
+accountsRouter.get('/:accountUid/balances', requireSessionAccount, async (req, res) => {
+  res.json(await callBank(res, () => enableBanking.getBalances(req.params.accountUid as string, psuHeaders(req))))
 })
 
 // Served from the saved copy; the bank is only asked for what's new (see transactionSync.ts).
@@ -68,18 +75,14 @@ accountsRouter.get('/:accountUid/balances', requireSessionAccount, async (req, r
 // the saved copy is served.
 accountsRouter.get('/:accountUid/transactions', requireSessionAccount, async (req, res) => {
   const account = res.locals.account as SessionAccount
-  const session = sessionOf(res)
-  if (session.ended) {
+  if (sessionOf(res).ended) {
     const saved = getSavedTransactions(account)
     if (!saved) throw new SessionEndedError()
     res.json(saved)
     return
   }
-  try {
-    res.json(await getAccountTransactions(account, psuHeaders(req), { refresh: req.query.refresh === 'true' }))
-  } catch (err) {
-    await confirmEnded(session.sessionId, err)
-  }
+  const refresh = req.query.refresh === 'true'
+  res.json(await callBank(res, () => getAccountTransactions(account, psuHeaders(req), { refresh })))
 })
 
 // Budgets: a monthly spending limit per category (see budgetStore.ts).

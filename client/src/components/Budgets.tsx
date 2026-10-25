@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { useBudgets, useDeleteBudget, useSetBudget, useTransactions } from '@/hooks/useBank'
 import { budgetProgress, monthOf, monthPace, type BudgetRow, type BudgetStatus } from '@/lib/budgets'
 import { CATEGORIES, type CategoryId, type CategorySelection } from '@/lib/categories'
-import { formatAmount, monthLabel } from '@/lib/format'
+import { calendarDate, formatAmount, longDate, monthLabel } from '@/lib/format'
 import { countedTransactions } from '@/lib/summary'
 import { cn, COMPACT_FIELD_CLASS } from '@/lib/utils'
 
@@ -21,16 +21,20 @@ const STATUS: Record<BudgetStatus, { label: string; className: string }> = {
 
 // Monthly limits per spending category, for the month picked in the breakdown (or this month).
 // Clicking a budget filters the transactions table to that category and month, like the breakdown.
+// Budgets stay editable when `readOnly` (the bank connection has ended): they're our own data, not
+// the bank's, and they'll apply again once the user reconnects.
 export function Budgets({
   accountUid,
   accountCurrency,
   selection,
   onSelectionChange,
+  readOnly = false,
 }: {
   accountUid: string
   accountCurrency: string | null
   selection: CategorySelection
   onSelectionChange: (selection: CategorySelection) => void
+  readOnly?: boolean
 }) {
   const transactions = useTransactions(accountUid)
   const budgets = useBudgets(accountUid)
@@ -39,7 +43,14 @@ export function Budgets({
   // A category id while editing that budget, 'new' while adding one.
   const [editing, setEditing] = useState<CategoryId | 'new' | null>(null)
 
-  const [today] = useState(() => new Date())
+  const [now] = useState(() => new Date())
+  // Once the connection has ended, nothing is known after the last sync, so budgets are measured as
+  // of then: its month by default, and the share of that month gone by then. Otherwise spending
+  // since would be missing, and a budget would look on track when it may not be. The date is the
+  // server's dateTo, which is where the saved transactions end, taken as a calendar date so the
+  // month can't differ from the data's around midnight.
+  const dataEnd = transactions.data?.dateTo
+  const today = useMemo(() => (readOnly && dataEnd ? calendarDate(dataEnd) : now), [readOnly, dataEnd, now])
   const month = selection.month ?? monthOf(today)
   const counted = useMemo(
     () => (transactions.data ? countedTransactions(transactions.data, accountCurrency) : null),
@@ -70,7 +81,11 @@ export function Budgets({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 id={`budgets-${accountUid}`} className="text-sm font-medium">
           Budgets · {monthLabel(month, 'long')}
-          {pace > 0 && pace < 1 && <span className="font-normal text-muted-foreground"> (so far)</span>}
+          {pace > 0 && pace < 1 && (
+            <span className="font-normal text-muted-foreground">
+              {readOnly && dataEnd ? ` (up to ${longDate(dataEnd)})` : ' (so far)'}
+            </span>
+          )}
         </h3>
         {editing !== 'new' && unbudgeted.length > 0 && budgets.data && (
           <Button variant="ghost" size="xs" onClick={() => startEditing('new')}>

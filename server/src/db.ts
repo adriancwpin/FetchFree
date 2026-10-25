@@ -77,3 +77,8 @@ for (const table of ['pending_auths', 'bank_sessions']) {
   addColumnIfMissing(table, 'aspsp_country', 'TEXT')
 }
 addColumnIfMissing('bank_sessions', 'ended_reason', 'TEXT')
+
+// An earlier version also ended sessions on unclear answers from Enable Banking (recorded as
+// "ended"). Only expired, revoked and closed count now, so give those sessions another chance: if
+// one really has ended, the next refusal from the bank records it properly.
+db.exec("UPDATE bank_sessions SET ended_reason = NULL WHERE ended_reason NOT IN ('expired', 'revoked', 'closed')")

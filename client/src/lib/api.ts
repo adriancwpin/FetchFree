@@ -63,6 +63,17 @@ export class ApiError extends Error {
 // The server's error responses: { error: "message", code?: "SESSION_ENDED" }.
 const errorBodySchema = z.looseObject({ error: z.string().optional(), code: z.string().optional() })
 
+// The error code for "the bank connection has ended" (see server/src/sessionEnded.ts).
+export const SESSION_ENDED = 'SESSION_ENDED'
+
+let sessionEndedListener: (() => void) | null = null
+
+// Called on every response that says the bank connection has ended, including retried requests,
+// before the error is thrown. Set once at startup (main.tsx) to switch the app to read-only.
+export function onSessionEnded(listener: () => void): void {
+  sessionEndedListener = listener
+}
+
 async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   const data: unknown = await response.json().catch(() => null)
@@ -70,7 +81,9 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
   if (!response.ok) {
     const body = errorBodySchema.safeParse(data)
     const message = body.success && body.data.error ? body.data.error : `Request failed with status ${response.status}`
-    throw new ApiError(message, response.status >= 500, body.success ? body.data.code : undefined)
+    const code = body.success ? body.data.code : undefined
+    if (code === SESSION_ENDED) sessionEndedListener?.()
+    throw new ApiError(message, response.status >= 500, code)
   }
 
   const parsed = schema.safeParse(data)
@@ -84,11 +97,17 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
 
 const bankRefSchema = z.object({ name: z.string(), country: z.string() })
 
+// The server's EndReason (server/src/sessionStore.ts), plus "ended" for any reason this client
+// doesn't know yet.
+export const END_REASONS = ['expired', 'revoked', 'closed', 'ended'] as const
+export type EndReason = (typeof END_REASONS)[number]
+
 const statusSchema = z.object({
   connected: z.boolean(),
-  // Why the latest connection can't be used any more ("expired", "revoked", "closed", "ended"),
-  // or null. While set, saved data is shown read-only with a "Reconnect your bank" banner.
-  ended: z.string().nullable(),
+  // Why the latest connection can't be used any more, or null. While set, saved data is shown
+  // read-only with a "Reconnect your bank" banner. A reason this client doesn't know yet reads as
+  // the generic "ended" rather than failing the whole status.
+  ended: z.enum(END_REASONS).catch('ended').nullable(),
   validUntil: z.string().nullable(),
   // The connected bank; null for connections made before the bank was recorded.
   bank: bankRefSchema.nullable(),

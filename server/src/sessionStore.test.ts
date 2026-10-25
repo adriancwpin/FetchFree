@@ -52,7 +52,7 @@ describe('bank sessions', () => {
       bank: NORDEA,
     })
 
-    expect(sessionStore.getCurrentSession()).toMatchObject({
+    expect(sessionStore.getLatestSession()).toMatchObject({
       sessionId: 's1',
       accounts: [{ uid: 'acc-1' }],
       bank: NORDEA,
@@ -68,14 +68,9 @@ describe('bank sessions', () => {
       bank: null,
     })
 
-    expect(sessionStore.getCurrentSession()?.validUntil).toBe('2099-01-01T12:00:00.000Z')
+    expect(sessionStore.getLatestSession()?.validUntil).toBe('2099-01-01T12:00:00.000Z')
   })
 
-  it('ignores an expired session', () => {
-    sessionStore.setCurrentSession({ sessionId: 'old', accounts: [], validUntil: inDays(-1), bank: null })
-
-    expect(sessionStore.getCurrentSession()).toBeNull()
-  })
 
   it('replaces every old session and returns only the live ones to revoke', () => {
     // Rows as older versions of the app could leave them: several at once.
@@ -101,16 +96,15 @@ describe('bank sessions', () => {
     sessionStore.setCurrentSession({ sessionId: 's1', accounts: [], validUntil: inDays(10), bank: null })
 
     expect(sessionStore.clearSessions()).toEqual(['s1'])
-    expect(sessionStore.getCurrentSession()).toBeNull()
+    expect(sessionStore.getLatestSession()).toBeNull()
   })
 })
 
 describe('ended sessions', () => {
-  it('keeps an ended session as the latest, with its reason, but not as the live one', () => {
+  it('keeps an ended session as the latest, with its reason', () => {
     sessionStore.setCurrentSession({ sessionId: 's1', accounts: [{ uid: 'acc-1' }], validUntil: inDays(10), bank: NORDEA })
     sessionStore.markEnded('s1', 'revoked')
 
-    expect(sessionStore.getCurrentSession()).toBeNull()
     expect(sessionStore.getLatestSession()).toMatchObject({ sessionId: 's1', bank: NORDEA, ended: 'revoked' })
   })
 

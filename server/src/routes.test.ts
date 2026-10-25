@@ -4,6 +4,7 @@ import { fakeBank, json, type FakeCall } from '../test/fakeBank.js'
 import { app } from './app.js'
 import { db } from './db.js'
 import { sessionStore } from './sessionStore.js'
+import { transactionStore } from './transactionStore.js'
 
 const CLIENT = 'http://localhost:5173/'
 const BANK_LOGIN_URL = 'https://bank.example/login'
@@ -102,8 +103,9 @@ describe('GET /callback', () => {
     const res = await request(app).get(`/callback?code=good-code&state=${state}`).set('Cookie', cookie)
 
     expect(redirectParams(res.headers.location!).get('connected')).toBe('1')
-    expect(sessionStore.getCurrentSession()).toMatchObject({
+    expect(sessionStore.getLatestSession()).toMatchObject({
       sessionId: 'new-session',
+      ended: null,
       bank: { name: 'Nordea', country: 'FI' },
     })
   })
@@ -114,7 +116,7 @@ describe('GET /callback', () => {
     const res = await request(app).get(`/callback?code=good-code&state=${state}`)
 
     expect(redirectParams(res.headers.location!).get('error')).toBe('invalid_state')
-    expect(sessionStore.getCurrentSession()).toBeNull()
+    expect(sessionStore.getLatestSession()).toBeNull()
   })
 
   it("rejects a state with another login's cookie", async () => {
@@ -470,6 +472,7 @@ describe('when the bank connection ends', () => {
     calls = fakeBank((call) => {
       if (call.path.startsWith('/sessions/')) {
         if (sessionStatus instanceof Error) return json({ message: 'down' }, 503)
+        if (sessionStatus === 'MISSING') return json({ error: 'SESSION_DOES_NOT_EXIST' }, 404)
         return json({ status: sessionStatus })
       }
       if (bankRefuses) return json({ message: 'refused' }, 401)
@@ -501,6 +504,53 @@ describe('when the bank connection ends', () => {
     expect(res.status).toBe(401)
     expect(res.body.code).toBeUndefined()
     expect(await status()).toMatchObject({ connected: true, ended: null })
+  })
+
+  it.each(['UNKNOWN', 'PENDING_AUTHORIZATION', 'INVALID', 'MISSING', 'constructor', 'toString'])(
+    "doesn't end the connection when the session status is unclear (%s)",
+    async (unclear) => {
+      bankRefuses = true
+      sessionStatus = unclear
+
+      const res = await request(app).get('/api/accounts/acc-1/balances')
+
+      expect(res.body.code).toBeUndefined()
+      expect(await status()).toMatchObject({ connected: true, ended: null })
+    },
+  )
+
+  it('measures the read-only window from the last sync, so old saved history stays in view', async () => {
+    // Synced 200 days ago, with a transaction from a few days before that.
+    const syncedOn = new Date(Date.now() - 200 * DAY_MS)
+    const dayOf = (date: Date) => date.toISOString().slice(0, 10)
+    const spentOn = dayOf(new Date(syncedOn.getTime() - 3 * DAY_MS))
+    transactionStore.save('hash:same-account', null, '2000-01-01', [{ entry_reference: 'old', booking_date: spentOn }], {
+      truncated: false,
+      unchecked: null,
+      keepFrom: '2000-01-01',
+      dropUnsettledBefore: '2000-01-01',
+    })
+    db.prepare('UPDATE account_syncs SET last_synced_at = ?').run(syncedOn.toISOString())
+    sessionStore.markEnded('session-acc-1', 'expired')
+
+    const res = await request(app).get('/api/accounts/acc-1/transactions')
+
+    // Ends at the last sync (later months aren't shown as empty), and starts 6 months before it.
+    expect(res.body.dateTo).toBe(dayOf(syncedOn))
+    expect(res.body.dateFrom <= spentOn).toBe(true)
+    expect(res.body.transactions.map((t: { entry_reference: string }) => t.entry_reference)).toEqual(['old'])
+  })
+
+  it('notices a revocation straight after Enable Banking said the session was fine', async () => {
+    bankRefuses = true
+    await request(app).get('/api/accounts/acc-1/balances')
+    expect((await status()).connected).toBe(true)
+
+    sessionStatus = 'REVOKED'
+    const res = await request(app).get('/api/accounts/acc-1/balances')
+
+    expect(res.body.code).toBe('SESSION_ENDED')
+    expect(await status()).toMatchObject({ connected: false, ended: 'revoked' })
   })
 
   it("passes the bank's error through when the session check itself fails", async () => {

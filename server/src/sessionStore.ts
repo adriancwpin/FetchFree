@@ -20,7 +20,7 @@ interface CurrentSession {
 }
 
 // Why a session can no longer be used. "expired" also covers passing our own valid_until.
-export type EndReason = 'expired' | 'revoked' | 'closed' | 'ended'
+export type EndReason = 'expired' | 'revoked' | 'closed'
 
 export interface LatestSession extends CurrentSession {
   // Null while the session is live.
@@ -79,15 +79,8 @@ export const sessionStore = {
       throw err
     }
   },
-  // The live session, or null if there's none or it has ended.
-  getCurrentSession(): CurrentSession | null {
-    const session = this.getLatestSession()
-    if (!session || session.ended) return null
-    const { ended: _ended, ...current } = session
-    return current
-  },
-  // The newest session, live or ended, so an ended connection's accounts and saved data can still
-  // be shown (read-only) until the user reconnects or disconnects.
+  // The newest session, live or ended. It's live while `ended` is null; once ended, its accounts and
+  // saved data can still be shown (read-only) until the user reconnects or disconnects.
   getLatestSession(): LatestSession | null {
     const row = db
       .prepare(

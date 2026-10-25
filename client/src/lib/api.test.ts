@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, bankLoginHref, getStatus, getTransactions } from '@/lib/api'
+import { ApiError, bankLoginHref, getStatus, getTransactions, onSessionEnded } from '@/lib/api'
 
 function respond(body: unknown, status = 200) {
   vi.stubGlobal('fetch', async () => new Response(JSON.stringify(body), { status }))
@@ -75,6 +75,29 @@ describe('getTransactions', () => {
       '/api/accounts/acc%201/transactions',
       '/api/accounts/acc%201/transactions?refresh=true',
     ])
+  })
+})
+
+describe('getStatus', () => {
+  it('reads a connection-ended reason it does not know yet as the generic "ended"', async () => {
+    respond({ connected: false, ended: 'cancelled', validUntil: null, bank: null, loginUrl: 'http://localhost:3000/login' })
+    expect((await getStatus()).ended).toBe('ended')
+  })
+})
+
+describe('onSessionEnded', () => {
+  it('is told about every response saying the bank connection has ended, before the error is thrown', async () => {
+    const listener = vi.fn()
+    onSessionEnded(listener)
+    respond({ error: 'Your bank connection has ended.', code: 'SESSION_ENDED' }, 401)
+
+    await expect(getStatus()).rejects.toMatchObject({ code: 'SESSION_ENDED' })
+    await expect(getStatus()).rejects.toMatchObject({ code: 'SESSION_ENDED' })
+    expect(listener).toHaveBeenCalledTimes(2)
+
+    respond({ error: 'Unknown account' }, 404)
+    await expect(getStatus()).rejects.toBeInstanceOf(ApiError)
+    expect(listener).toHaveBeenCalledTimes(2)
   })
 })
 

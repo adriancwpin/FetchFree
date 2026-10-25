@@ -39,7 +39,31 @@ it('adds the newer columns to a database from an older version without losing th
     expect(columnsOf(table)).toEqual(expect.arrayContaining(['aspsp_name', 'aspsp_country']))
   }
   expect(columnsOf('bank_sessions')).toContain('ended_reason')
-  expect(sessionStore.getCurrentSession()).toMatchObject({ sessionId: 'legacy-session', bank: null })
-  expect(sessionStore.getLatestSession()?.ended).toBeNull()
+  expect(sessionStore.getLatestSession()).toMatchObject({ sessionId: 'legacy-session', bank: null, ended: null })
+  db.close()
+})
+
+it("un-ends sessions an earlier version ended on an unclear answer, keeping clear ones", async () => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fetchfree-migration-'))
+  const dbPath = path.join(dir, 'ended.db')
+
+  const earlier = new DatabaseSync(dbPath)
+  earlier.exec(`
+    CREATE TABLE bank_sessions (session_id TEXT PRIMARY KEY, accounts TEXT NOT NULL, valid_until TEXT NOT NULL,
+                                created_at TEXT NOT NULL, aspsp_name TEXT, aspsp_country TEXT, ended_reason TEXT);
+  `)
+  const insert = earlier.prepare('INSERT INTO bank_sessions VALUES (?, ?, ?, ?, NULL, NULL, ?)')
+  insert.run('unclear', '[]', '2099-01-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z', 'ended')
+  insert.run('revoked', '[]', '2099-01-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'revoked')
+  earlier.close()
+
+  process.env.DB_PATH = dbPath
+  vi.resetModules()
+  const { db } = await import('./db.js')
+
+  expect(db.prepare('SELECT session_id, ended_reason FROM bank_sessions ORDER BY session_id').all()).toEqual([
+    { session_id: 'revoked', ended_reason: 'revoked' },
+    { session_id: 'unclear', ended_reason: null },
+  ])
   db.close()
 })

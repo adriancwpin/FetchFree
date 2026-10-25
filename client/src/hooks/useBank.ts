@@ -105,5 +105,12 @@ export function useRefreshTransactions(accountUid: string) {
   return useMutation({
     mutationFn: () => api.getTransactions(accountUid, { refresh: true }),
     onSuccess: (data) => queryClient.setQueryData(['accounts', accountUid, 'transactions'], data),
+    // If Refresh is what finds that the bank connection has ended, reload the transactions now:
+    // the server answers from the saved copy, as of the last sync.
+    onError: (error) => {
+      if (error instanceof api.ApiError && error.code === api.SESSION_ENDED) {
+        void queryClient.invalidateQueries({ queryKey: ['accounts', accountUid, 'transactions'] })
+      }
+    },
   })
 }

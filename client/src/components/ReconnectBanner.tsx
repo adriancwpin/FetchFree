@@ -1,12 +1,13 @@
 import { Loader2, PlugZap } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { useDisconnect } from '@/hooks/useBank'
-import { bankLoginHref, type Status } from '@/lib/api'
+import { bankLoginHref, type EndReason, type Status } from '@/lib/api'
 
-const ENDED_TEXT: Record<string, string> = {
+const ENDED_TEXT: Record<EndReason, string> = {
   expired: 'has expired',
   revoked: 'was revoked at your bank',
   closed: 'was closed by your bank',
+  ended: 'has ended',
 }
 
 // Shown instead of the connection bar once the bank connection can't be used any more. The saved
@@ -22,7 +23,7 @@ export function ReconnectBanner({ status }: { status: Status }) {
         <PlugZap className="mt-0.5 size-5 shrink-0 text-destructive" aria-hidden="true" />
         <div className="flex flex-col gap-1">
           <p className="text-sm font-medium">
-            Your connection to {bank?.name ?? 'your bank'} {ENDED_TEXT[status.ended ?? ''] ?? 'has ended'}.
+            Your connection to {bank?.name ?? 'your bank'} {ENDED_TEXT[status.ended ?? 'ended']}.
           </p>
           <p className="text-sm text-muted-foreground">
             You're seeing your saved transactions; they won't update until you reconnect. Your budgets are kept.

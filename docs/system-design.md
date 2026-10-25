@@ -246,20 +246,21 @@ A connection ends in two ways:
 2. **The bank ends it early**, e.g. you revoke access in your bank's app, or the bank closes it.
 
 ```
-Account-data request fails with 4xx (not 429)
+Account-data request fails with 4xx (not 429)        (every bank call goes through callBank())
   │
-  ├─ ask Enable Banking: GET /sessions/{id}
-  │     ├─ "AUTHORIZED"            → not a session problem: pass the original error through
-  │     ├─ check itself fails      → pass the original error through
-  │     └─ EXPIRED/REVOKED/CLOSED/MISSING
-  │            → bank_sessions.ended_reason = "revoked"…  → 401 { code: "SESSION_ENDED" }
+  ├─ ask Enable Banking: GET /sessions/{id}            (one shared check for requests refused together)
+  │     ├─ EXPIRED / REVOKED / CLOSED
+  │     │      → bank_sessions.ended_reason = "revoked"…  → 401 { code: "SESSION_ENDED" }
+  │     ├─ anything else (AUTHORIZED, unclear, unknown session)
+  │     │      → pass the original error through
+  │     └─ the check itself fails → pass the original error through
   │
   └─ (expiry by date needs no check: valid_until has passed → ended = "expired")
 ```
 
-- **Why double-check?** A 401 also means **our own JWT** was rejected (e.g. a wrong key). Telling you to reconnect wouldn't help then, so the server only says "ended" once Enable Banking confirms it.
-- **The client notices it anywhere.** Any request that gets `code: "SESSION_ENDED"` makes `main.tsx` refetch `/status` (and the account data, once). `/status` now says `{ connected: false, ended: "revoked", bank }`.
-- **Read-only mode.** `App.tsx` shows a **"Reconnect your bank" banner** and keeps showing the accounts, chart, budgets and saved transactions. The server serves an ended session's accounts and **saved transactions without asking the bank**. Balances only ever come live, so they show "Balance not updated", and Refresh is hidden. Budgets are our own data, so they still work.
+- **Why double-check, and why so strict?** A 401 also means **our own JWT** was rejected (e.g. a wrong key), and reconnecting wouldn't fix that. Only the three unambiguous statuses count, because wrongly ending a working connection leaves it stuck read-only until you log in to the bank again. Even a 404 for the session isn't enough, since a misconfigured URL could cause that. The session is checked on **every** refusal, so a revocation is noticed straight away; the cost is one extra call to Enable Banking when a bank refuses something for another reason. An earlier version also ended sessions on unclear answers (recorded as `ended`); those are un-ended on startup.
+- **The client notices it anywhere.** `request()` in [api.ts](../client/src/lib/api.ts) tells a listener about every response with `code: "SESSION_ENDED"`, retries included. The listener in `main.tsx` refetches `/status` once per burst, restarting any status fetch already on its way, since that may have started before the server knew. The failed request itself is **retried**: by then the server has recorded the end, so the retry is answered from the saved copy. A failed **Refresh** (which isn't retried) reloads that account's transactions instead. `/status` then says `{ connected: false, ended: "revoked", bank }`.
+- **Read-only mode.** `App.tsx` shows a **"Reconnect your bank" banner** and keeps showing the accounts, chart, budgets and saved transactions. The server serves an ended session's accounts and **saved transactions without asking the bank**. Balances only ever come live, so they show "Balance not updated", and Refresh is hidden. The saved data's whole 6-month window is **as of the last sync**: it ends then (later months aren't shown as months with no spending) and starts 6 months before (old history doesn't slide out of view as time passes). Budgets are measured as of that date too. Budgets are our own data, so they can still be edited.
 - **Reconnect Nordea** starts a login with the same bank. The new session replaces the ended one, and because saved data and budgets are filed under the stable account key (§4.6), everything is back. **Connect a different bank** is Disconnect, which shows the bank picker.
 
 Code: [server/src/sessionEnded.ts](../server/src/sessionEnded.ts), [client/src/components/ReconnectBanner.tsx](../client/src/components/ReconnectBanner.tsx).

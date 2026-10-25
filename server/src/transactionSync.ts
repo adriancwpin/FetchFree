@@ -150,18 +150,24 @@ export async function getAccountTransactions(
 export function getSavedTransactions(account: SessionAccount): AccountTransactions | null {
   const key = accountKey(account)
   const saved = transactionStore.getSync(key)
-  // The connection's end is reported on its own, so an older sync failure isn't repeated here.
-  return saved && savedResponse(key, { ...saved, lastError: null }, new Date())
+  if (!saved) return null
+  // Nothing is known after the last sync, so the whole window is as of then: it ends at the last
+  // sync (months since aren't shown as months with no spending) and starts 6 months before it (so
+  // the saved history doesn't slide out of view as time passes). The connection's end is reported
+  // on its own, so an older sync failure isn't repeated here.
+  return savedResponse(key, { ...saved, lastError: null }, new Date(saved.lastSyncedAt))
 }
 
-function savedResponse(key: string, sync: AccountSync, now: Date): AccountTransactions {
-  const dateFrom = laterDate(sync.coveredFrom, windowStart(now))
+// The response for the 6-month window ending on `asOf`'s (UTC) date.
+function savedResponse(key: string, sync: AccountSync, asOf: Date): AccountTransactions {
+  const dateTo = toDateString(asOf)
+  const dateFrom = laterDate(sync.coveredFrom, windowStart(asOf))
   // Only the part of a gap inside the window that's shown.
   const gap = sync.gap && sync.gap.to > dateFrom ? { from: laterDate(sync.gap.from, dateFrom), to: sync.gap.to } : null
   return {
     transactions: transactionStore.list(key, dateFrom),
     dateFrom,
-    dateTo: toDateString(now),
+    dateTo,
     truncated: sync.truncated,
     lastSyncedAt: sync.lastSyncedAt,
     syncError: sync.lastError,

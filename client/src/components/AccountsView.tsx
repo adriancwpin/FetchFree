@@ -15,6 +15,7 @@ import { formatAmount, timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 // `readOnly` once the bank connection has ended: saved data only, no balances, no Refresh.
+// Budgets stay editable (they're our own data, not the bank's).
 export function AccountsView({ readOnly = false }: { readOnly?: boolean }) {
   const accounts = useAccounts()
 
@@ -109,6 +110,7 @@ function AccountCard({ account, readOnly }: { account: Account; readOnly: boolea
               accountCurrency={account.currency ?? null}
               selection={selection}
               onSelectionChange={setSelection}
+              readOnly={readOnly}
             />
             <CategoryBreakdown
               accountUid={account.uid}
