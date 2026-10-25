@@ -154,6 +154,31 @@ Code: [server/src/routes/accounts.ts](../server/src/routes/accounts.ts), [server
 
 `DELETE /api/auth/session` deletes the sessions from the database straight away, then asks Enable Banking to revoke them **in the background**. A slow bank never blocks the user. The client switches to the Connect screen *before* removing cached account data, so there's no error flash.
 
+### 4.5 Spending categories
+
+Banks rarely send a category. Nordea's `merchant_category_code` is empty on every transaction, so [categories.ts](../client/src/lib/categories.ts) works it out from **text**:
+
+```
+counterparty name  +  payment message  +  bank's transaction type
+"K market Helsinki"   "18110005577890"     "Korttiosto" (card purchase)
+                         │ lower-case, remove accents
+                         ▼
+          check rules in order → first match wins → "groceries"
+```
+
+- **Rules** are regular expressions in a fixed order, separate for money out (`OUT_RULES`) and money in (`IN_RULES`). They cover English and Finnish ("vuokra" = rent, "nosto" = withdrawal), and match whole words, so "steam" doesn't match "Steamboat". Money-out rules run in three tiers:
+  1. **What the bank says the transaction is**: own transfer, ATM withdrawal. An own transfer that mentions "rent" is still a transfer.
+  2. **Named merchants and kinds of business**: groceries, eating out, transport, travel… Transport comes before travel, so a taxi or car hire at an airport is transport.
+  3. **Generic words that might also be part of a merchant's name** ("internet", "rent"), so "Internet Pizza Oy" is eating out, not a bill.
+- **Fallbacks:** an unmatched card purchase → Shopping. A payment to something that looks like a person's name → Payments to people (or From people). Everything else → Other.
+- **The totals always match the chart.** `countedTransactions()` in [summary.ts](../client/src/lib/summary.ts) decides which transactions count (in the window, settled, in the summary currency), and both the monthly chart and `breakdownByCategory()` use it. A test checks that the category totals equal "Money in" and "Money out".
+- **The filtered table matches the breakdown.** Clicking a category lists `transactionsFor(counted, selection)`, the same function the breakdown totals. So the rows always add up to the amount you clicked, without pending or other-currency entries.
+- **Each transaction's category is computed once** and cached per transaction object (a `WeakMap`), because the table, breakdown and filter all ask for it on every render.
+- **It runs in the browser**, like the summary: there's no stored data to categorise on the server yet.
+- **Adding a rule:** add a `{ category, match: /…/ }` line in the right place in `OUT_RULES` or `IN_RULES`, plus a test case in `categories.test.ts`. On the Nordea sandbox data, 97% of transactions get a real category.
+
+The UI ([CategoryBreakdown.tsx](../client/src/components/CategoryBreakdown.tsx)) ranks categories by amount, with a Spending/Income switch and a month picker. Clicking a category filters the transactions table. The bars use one colour per direction: it's one series ranked by size, so a rainbow of colours would add nothing.
+
 ---
 
 ## 5. Data model (SQLite)
@@ -243,7 +268,7 @@ Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable
 1. **No users or login.** It's one shared connection, and safe only because the server is loopback-only.
 2. **No UI tests.** The logic is covered by automated tests (§11), but the React components aren't.
 3. **Transactions aren't stored**, so there's no history beyond what the bank returns.
-4. **No categories, search or weekly view** in the summary.
+4. **Categories are automatic only.** You can't change a transaction's category or add your own rules from the app yet; that needs stored transactions. There's no search or weekly view either.
 5. If the bank revokes a session from its side, the app shows errors until you click Disconnect.
 
 ---
@@ -259,7 +284,7 @@ Run `npm test` in `server/` and in `client/`. GitHub Actions runs both on every 
 | `server/src/enableBankingClient.test.ts` | Timeouts, error pages, paging, the 89-day fallback rules, PSU headers, consent clamp | `fetch` replaced by a fake Enable Banking (`test/fakeBank.ts`) |
 | `server/src/bankDirectory.test.ts` | Caching, failures not cached, bank lookup | Fake Enable Banking |
 | `server/src/routes.test.ts` | The whole HTTP flow: `/login` guard, `/callback` state and cookie checks, account guard, error handling | supertest calls `app` directly, without a real server |
-| `client/src/lib/*.test.ts` | Summary maths, formatting, API error and retry rules | `fetch` replaced in the API tests |
+| `client/src/lib/*.test.ts` | Summary maths, categories (real Nordea examples, totals match the chart), formatting, API error and retry rules | `fetch` replaced in the API tests |
 
 `server/test/setup.ts` runs before every server test file. It generates a throwaway private key and sets the environment variables, so tests never read your real `.env`, key or database.
 

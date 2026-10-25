@@ -1,3 +1,18 @@
+// Lower-case with accents removed, for matching text: "sparkasse" finds "Sparkasse",
+// "ostgota" finds "Östgöta", "lapsilisa" matches "Lapsilisä".
+export function normalise(text: string): string {
+  return text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
+}
+
+// "2026-10" → "Oct", or "October 2026" with style "long".
+export function monthLabel(month: string, style: 'short' | 'long' = 'short'): string {
+  const [year, monthIndex] = month.split('-').map(Number)
+  return new Date(year ?? 0, (monthIndex ?? 1) - 1, 1).toLocaleString(undefined, {
+    month: style,
+    ...(style === 'long' ? { year: 'numeric' } : {}),
+  })
+}
+
 const regionNames = new Intl.DisplayNames(undefined, { type: 'region' })
 
 // "FI" → "Finland". Intl throws on a malformed code, so fall back to the code itself.

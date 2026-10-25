@@ -34,6 +34,8 @@ const transactionSchema = z.looseObject({
   booking_date: z.string().nullish(),
   value_date: z.string().nullish(),
   remittance_information: z.array(z.string()).nullish(),
+  // The bank's own transaction type, e.g. "Korttiosto" (card purchase); used for categories.
+  bank_transaction_code: z.looseObject({ description: z.string().nullish() }).nullish(),
   creditor: partySchema,
   debtor: partySchema,
 })
