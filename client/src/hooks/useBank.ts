@@ -66,6 +66,36 @@ export function useTransactions(accountUid: string) {
   })
 }
 
+// Budgets live on our server, not the bank, so they're cheap to read and change.
+export function useBudgets(accountUid: string) {
+  return useQuery({ queryKey: ['accounts', accountUid, 'budgets'], queryFn: () => api.getBudgets(accountUid) })
+}
+
+// Saving and removing budgets update the cached list directly, so it changes without a refetch.
+export function useSetBudget(accountUid: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ category, amount }: { category: string; amount: number }) =>
+      api.setBudget(accountUid, category, amount),
+    onSuccess: (saved) =>
+      queryClient.setQueryData(['accounts', accountUid, 'budgets'], (budgets: api.Budget[] | undefined) => [
+        ...(budgets ?? []).filter((budget) => budget.category !== saved.category),
+        saved,
+      ]),
+  })
+}
+
+export function useDeleteBudget(accountUid: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (category: string) => api.deleteBudget(accountUid, category),
+    onSuccess: (_result, category) =>
+      queryClient.setQueryData(['accounts', accountUid, 'budgets'], (budgets: api.Budget[] | undefined) =>
+        (budgets ?? []).filter((budget) => budget.category !== category),
+      ),
+  })
+}
+
 // The Refresh button: has the server check with the bank now, then shows the result everywhere
 // the account's transactions are used.
 export function useRefreshTransactions(accountUid: string) {

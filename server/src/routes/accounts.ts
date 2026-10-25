@@ -1,7 +1,8 @@
 import { Router, type NextFunction, type Request, type Response } from 'express'
 import * as enableBanking from '../enableBankingClient.js'
 import { sessionStore } from '../sessionStore.js'
-import { getAccountTransactions, type SessionAccount } from '../transactionSync.js'
+import { budgetStore } from '../budgetStore.js'
+import { accountKey, getAccountTransactions, type SessionAccount } from '../transactionSync.js'
 
 export const accountsRouter = Router()
 
@@ -48,4 +49,47 @@ accountsRouter.get('/:accountUid/balances', requireSessionAccount, async (req, r
 accountsRouter.get('/:accountUid/transactions', requireSessionAccount, async (req, res) => {
   const account = res.locals.account as SessionAccount
   res.json(await getAccountTransactions(account, psuHeaders(req), { refresh: req.query.refresh === 'true' }))
+})
+
+// Budgets: a monthly spending limit per category (see budgetStore.ts).
+const CATEGORY_ID = /^[a-z][a-zA-Z]{0,39}$/
+const MAX_BUDGET = 1_000_000_000
+
+function budgetKey(res: Response): string {
+  return accountKey(res.locals.account as SessionAccount)
+}
+
+// Whole cents from a request amount, or a message saying what's wrong with it.
+function parseBudgetAmount(value: unknown): { cents: number } | { error: string } {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return { error: 'amount must be a number' }
+  if (value <= 0 || value > MAX_BUDGET) return { error: `amount must be more than 0 and at most ${MAX_BUDGET}` }
+  const cents = Math.round(value * 100)
+  // Allow for floating-point noise (e.g. 0.1 + 0.2), but not a third decimal place.
+  if (Math.abs(value * 100 - cents) > 1e-6) return { error: 'amount can have at most 2 decimal places' }
+  return { cents }
+}
+
+accountsRouter.get('/:accountUid/budgets', requireSessionAccount, (_req, res) => {
+  res.json(budgetStore.list(budgetKey(res)))
+})
+
+// Other websites can't change budgets: browsers only send a cross-site PUT or DELETE (or a JSON
+// body) after a CORS preflight, which only the client's origin passes, and HTML forms can't send them.
+accountsRouter.put('/:accountUid/budgets/:category', requireSessionAccount, (req, res) => {
+  const category = req.params.category as string
+  if (!CATEGORY_ID.test(category)) {
+    res.status(400).json({ error: 'Unknown category' })
+    return
+  }
+  const amount = parseBudgetAmount((req.body as { amount?: unknown } | undefined)?.amount)
+  if ('error' in amount) {
+    res.status(400).json({ error: amount.error })
+    return
+  }
+  res.json(budgetStore.set(budgetKey(res), category, amount.cents))
+})
+
+accountsRouter.delete('/:accountUid/budgets/:category', requireSessionAccount, (req, res) => {
+  budgetStore.remove(budgetKey(res), req.params.category as string)
+  res.status(204).end()
 })

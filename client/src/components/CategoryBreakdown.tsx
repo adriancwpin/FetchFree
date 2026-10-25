@@ -5,10 +5,7 @@ import { useTransactions } from '@/hooks/useBank'
 import { breakdownByCategory, CATEGORIES, type CategorySelection, type Direction } from '@/lib/categories'
 import { formatAmount, monthLabel } from '@/lib/format'
 import { countedTransactions } from '@/lib/summary'
-import { cn } from '@/lib/utils'
-
-const FIELD_CLASS =
-  'h-8 rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30 [&_option]:bg-popover [&_option]:text-popover-foreground'
+import { cn, COMPACT_FIELD_CLASS } from '@/lib/utils'
 
 // One colour per direction, the same as the monthly chart: this is one series ranked by size,
 // so categories are told apart by their label and icon, never by colour.
@@ -75,7 +72,7 @@ export function CategoryBreakdown({
           </div>
           <select
             aria-label="Period"
-            className={FIELD_CLASS}
+            className={COMPACT_FIELD_CLASS}
             value={selection.month ?? ''}
             onChange={(event) =>
               onSelectionChange({ direction: selection.direction, month: event.target.value || undefined })

@@ -3,8 +3,8 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { config } from './config.js'
 
-// All SQL lives here, in sessionStore.ts and in transactionStore.ts, so moving to Postgres later
-// only touches these files.
+// All SQL lives here and in the stores (sessionStore.ts, transactionStore.ts, budgetStore.ts), so
+// moving to Postgres later only touches these files.
 
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true })
 
@@ -50,6 +50,14 @@ db.exec(`
     truncated INTEGER NOT NULL,
     last_error TEXT,
     last_failed_at TEXT
+  );
+
+  -- Monthly spending limits per category (see budgetStore.ts).
+  CREATE TABLE IF NOT EXISTS budgets (
+    account_key TEXT NOT NULL,
+    category TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL,
+    PRIMARY KEY (account_key, category)
   );
 `)
 

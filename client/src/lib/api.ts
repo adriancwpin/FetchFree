@@ -148,6 +148,35 @@ const transactionsResponseSchema = z.object({
 
 export type TransactionsResponse = z.infer<typeof transactionsResponseSchema>
 
+const budgetSchema = z.object({ category: z.string(), amount: z.number() })
+
+// A monthly spending limit for one category, in the account's currency.
+export type Budget = z.infer<typeof budgetSchema>
+
+function budgetsPath(accountUid: string, category?: string) {
+  const base = `/api/accounts/${encodeURIComponent(accountUid)}/budgets`
+  return category ? `${base}/${encodeURIComponent(category)}` : base
+}
+
+export function getBudgets(accountUid: string) {
+  return request(budgetsPath(accountUid), z.array(budgetSchema))
+}
+
+export function setBudget(accountUid: string, category: string, amount: number) {
+  return request(budgetsPath(accountUid, category), budgetSchema, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount }),
+  })
+}
+
+export async function deleteBudget(accountUid: string, category: string) {
+  const response = await fetch(budgetsPath(accountUid, category), { method: 'DELETE' })
+  if (!response.ok) {
+    throw new ApiError(`Removing the budget failed with status ${response.status}`, response.status >= 500)
+  }
+}
+
 // `refresh` asks the server to check with the bank even if its saved copy is recent.
 export function getTransactions(accountUid: string, options: { refresh?: boolean } = {}) {
   const query = options.refresh ? '?refresh=true' : ''

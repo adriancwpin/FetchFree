@@ -54,7 +54,7 @@ function redirectParams(location: string): URLSearchParams {
 let calls: FakeCall[]
 
 beforeEach(() => {
-  db.exec('DELETE FROM pending_auths; DELETE FROM bank_sessions; DELETE FROM transactions; DELETE FROM account_syncs;')
+  db.exec('DELETE FROM pending_auths; DELETE FROM bank_sessions; DELETE FROM transactions; DELETE FROM account_syncs; DELETE FROM budgets;')
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   calls = fakeEnableBanking()
@@ -426,6 +426,76 @@ describe('GET /api/accounts/:uid/transactions (saved transactions)', () => {
 
     expect(res.status).toBe(200)
     expect(res.body.dateFrom).toBe(daysAgo(89))
+  })
+})
+
+describe('budgets', () => {
+  function connect(uid: string): void {
+    sessionStore.setCurrentSession({
+      sessionId: `session-${uid}`,
+      accounts: [{ uid, identification_hash: 'same-account' }],
+      validUntil: new Date(Date.now() + 86_400_000).toISOString(),
+      bank: null,
+    })
+  }
+
+  const put = (uid: string, category: string, body: unknown) =>
+    request(app).put(`/api/accounts/${uid}/budgets/${category}`).send(body as object)
+
+  beforeEach(() => connect('acc-1'))
+
+  it('saves, lists, replaces and removes a budget', async () => {
+    expect((await put('acc-1', 'groceries', { amount: 300 })).body).toEqual({ category: 'groceries', amount: 300 })
+    await put('acc-1', 'eatingOut', { amount: 80.5 })
+    await put('acc-1', 'groceries', { amount: 250.25 })
+
+    const listed = await request(app).get('/api/accounts/acc-1/budgets')
+    expect(listed.body).toEqual([
+      { category: 'eatingOut', amount: 80.5 },
+      { category: 'groceries', amount: 250.25 },
+    ])
+
+    expect((await request(app).delete('/api/accounts/acc-1/budgets/groceries')).status).toBe(204)
+    expect((await request(app).get('/api/accounts/acc-1/budgets')).body).toEqual([{ category: 'eatingOut', amount: 80.5 }])
+  })
+
+  it('keeps budgets when the bank is reconnected and the account gets a new uid', async () => {
+    await put('acc-1', 'groceries', { amount: 300 })
+    connect('acc-2')
+
+    expect((await request(app).get('/api/accounts/acc-2/budgets')).body).toEqual([{ category: 'groceries', amount: 300 }])
+  })
+
+  it.each([
+    ['a negative amount', 'groceries', { amount: -5 }],
+    ['zero', 'groceries', { amount: 0 }],
+    ['three decimal places', 'groceries', { amount: 1.005 }],
+    ['a string', 'groceries', { amount: '300' }],
+    ['no amount', 'groceries', {}],
+    ['too large an amount', 'groceries', { amount: 2e9 }],
+    ['a malformed category', 'Not-A-Category', { amount: 10 }],
+  ])('rejects %s with 400', async (_case, category, body) => {
+    const res = await put('acc-1', category, body)
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBeTruthy()
+    expect((await request(app).get('/api/accounts/acc-1/budgets')).body).toEqual([])
+  })
+
+  it('accepts amounts with floating-point noise, like 0.1 + 0.2', async () => {
+    expect((await put('acc-1', 'groceries', { amount: 0.1 + 0.2 })).body.amount).toBe(0.3)
+  })
+
+  it('rejects a body that is not JSON', async () => {
+    const res = await request(app)
+      .put('/api/accounts/acc-1/budgets/groceries')
+      .set('Content-Type', 'text/plain')
+      .send('amount=300')
+    expect(res.status).toBe(400)
+  })
+
+  it("refuses an account that isn't in the current session", async () => {
+    expect((await request(app).get('/api/accounts/someone-elses/budgets')).status).toBe(404)
+    expect((await put('someone-elses', 'groceries', { amount: 10 })).status).toBe(404)
   })
 })
 
