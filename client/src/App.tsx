@@ -1,6 +1,7 @@
 import { AccountsView } from '@/components/AccountsView'
 import { ConnectBank } from '@/components/ConnectBank'
 import { ConnectionBar } from '@/components/ConnectionBar'
+import { ReconnectBanner } from '@/components/ReconnectBanner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useStatus } from '@/hooks/useBank'
 
@@ -44,6 +45,12 @@ function App() {
         <>
           <ConnectionBar validUntil={status.data.validUntil} bank={status.data.bank} />
           <AccountsView />
+        </>
+      ) : status.data.ended ? (
+        // The connection can't be used any more: saved data stays visible, read-only.
+        <>
+          <ReconnectBanner status={status.data} />
+          <AccountsView readOnly />
         </>
       ) : (
         <ConnectBank loginUrl={status.data.loginUrl} error={callbackError} />

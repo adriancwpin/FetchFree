@@ -142,16 +142,29 @@ export async function getAccountTransactions(
     }
   }
 
-  const dateFrom = laterDate(current.coveredFrom, start)
+  return savedResponse(key, current, now)
+}
+
+// The saved copy only, without asking the bank: for when the bank connection has ended. Null if
+// nothing was ever saved for this account.
+export function getSavedTransactions(account: SessionAccount): AccountTransactions | null {
+  const key = accountKey(account)
+  const saved = transactionStore.getSync(key)
+  // The connection's end is reported on its own, so an older sync failure isn't repeated here.
+  return saved && savedResponse(key, { ...saved, lastError: null }, new Date())
+}
+
+function savedResponse(key: string, sync: AccountSync, now: Date): AccountTransactions {
+  const dateFrom = laterDate(sync.coveredFrom, windowStart(now))
   // Only the part of a gap inside the window that's shown.
-  const gap = current.gap && current.gap.to > dateFrom ? { from: laterDate(current.gap.from, dateFrom), to: current.gap.to } : null
+  const gap = sync.gap && sync.gap.to > dateFrom ? { from: laterDate(sync.gap.from, dateFrom), to: sync.gap.to } : null
   return {
     transactions: transactionStore.list(key, dateFrom),
     dateFrom,
     dateTo: toDateString(now),
-    truncated: current.truncated,
-    lastSyncedAt: current.lastSyncedAt,
-    syncError: current.lastError,
+    truncated: sync.truncated,
+    lastSyncedAt: sync.lastSyncedAt,
+    syncError: sync.lastError,
     gap,
   }
 }

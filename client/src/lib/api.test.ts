@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, getStatus, getTransactions } from '@/lib/api'
+import { ApiError, bankLoginHref, getStatus, getTransactions } from '@/lib/api'
 
 function respond(body: unknown, status = 200) {
   vi.stubGlobal('fetch', async () => new Response(JSON.stringify(body), { status }))
@@ -20,6 +20,11 @@ describe('API errors and the retry policy', () => {
     expect(error).toMatchObject({ retryable: true, message: 'Enable Banking request failed with status 503' })
   })
 
+  it('keeps the code the server names the problem with', async () => {
+    respond({ error: 'Your bank connection has ended.', code: 'SESSION_ENDED' }, 401)
+    await expect(getStatus()).rejects.toMatchObject({ code: 'SESSION_ENDED', retryable: false })
+  })
+
   it('marks client errors (4xx) as not worth retrying', async () => {
     respond({ error: 'Unknown account' }, 404)
     await expect(getStatus()).rejects.toMatchObject({ retryable: false, message: 'Unknown account' })
@@ -38,6 +43,7 @@ describe('API errors and the retry policy', () => {
   it('returns the parsed data when the shape is right', async () => {
     const status = {
       connected: true,
+      ended: null,
       validUntil: '2026-11-01T00:00:00.000Z',
       bank: { name: 'Nordea', country: 'FI' },
       loginUrl: 'http://localhost:3000/login',
@@ -69,5 +75,13 @@ describe('getTransactions', () => {
       '/api/accounts/acc%201/transactions',
       '/api/accounts/acc%201/transactions?refresh=true',
     ])
+  })
+})
+
+describe('bankLoginHref', () => {
+  it('starts the login on the server with the bank and its country', () => {
+    expect(bankLoginHref('http://localhost:3000/login', { name: 'S-Pankki & Co', country: 'FI' })).toBe(
+      'http://localhost:3000/login?bank=S-Pankki+%26+Co&country=FI',
+    )
   })
 })

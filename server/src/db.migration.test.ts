@@ -11,7 +11,7 @@ afterEach(() => {
   process.env.DB_PATH = ':memory:'
 })
 
-it('adds the bank columns to a database from an older version without losing the session', async () => {
+it('adds the newer columns to a database from an older version without losing the session', async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fetchfree-migration-'))
   const dbPath = path.join(dir, 'legacy.db')
 
@@ -33,10 +33,13 @@ it('adds the bank columns to a database from an older version without losing the
   const { sessionStore } = await import('./sessionStore.js')
   const { db } = await import('./db.js')
 
+  const columnsOf = (table: string) =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name)
   for (const table of ['pending_auths', 'bank_sessions']) {
-    const columns = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name)
-    expect(columns).toEqual(expect.arrayContaining(['aspsp_name', 'aspsp_country']))
+    expect(columnsOf(table)).toEqual(expect.arrayContaining(['aspsp_name', 'aspsp_country']))
   }
+  expect(columnsOf('bank_sessions')).toContain('ended_reason')
   expect(sessionStore.getCurrentSession()).toMatchObject({ sessionId: 'legacy-session', bank: null })
+  expect(sessionStore.getLatestSession()?.ended).toBeNull()
   db.close()
 })

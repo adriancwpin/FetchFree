@@ -224,6 +224,8 @@ describe('GET /api/accounts/:uid/transactions (saved transactions)', () => {
   let repeatPages: boolean
   // While set, the bank holds its answers until this resolves.
   let bankGate: Promise<void> | null
+  // What Enable Banking says about the session when the server checks it.
+  let sessionStatus: string
 
   function connect(uid: string): void {
     sessionStore.setCurrentSession({
@@ -242,7 +244,9 @@ describe('GET /api/accounts/:uid/transactions (saved transactions)', () => {
     refuseOlderThanDays = null
     repeatPages = false
     bankGate = null
+    sessionStatus = 'AUTHORIZED'
     calls = fakeBank(async (call) => {
+      if (call.path.startsWith('/sessions/')) return json({ status: sessionStatus })
       if (!call.path.endsWith('/transactions')) return json({ message: 'not found' }, 404)
       if (bankGate) await bankGate
       if (bankFailsWith) return json({ message: 'failed' }, bankFailsWith)
@@ -319,12 +323,26 @@ describe('GET /api/accounts/:uid/transactions (saved transactions)', () => {
     expect(refreshed.body.syncError).toBeNull()
   })
 
-  it.each([401, 403])("passes a %i through even with saved data, so the user knows to reconnect", async (status) => {
+  it.each([401, 403])(
+    'passes a %i through when the session is still authorized (not a reason to reconnect)',
+    async (status) => {
+      await request(app).get('/api/accounts/acc-1/transactions')
+      bankFailsWith = status
+
+      const res = await request(app).get('/api/accounts/acc-1/transactions?refresh=true')
+      expect(res.status).toBe(status)
+      expect(res.body.code).toBeUndefined()
+    },
+  )
+
+  it('reports SESSION_ENDED when the bank refuses and the session is no longer authorized', async () => {
     await request(app).get('/api/accounts/acc-1/transactions')
-    bankFailsWith = status
+    bankFailsWith = 403
+    sessionStatus = 'REVOKED'
 
     const res = await request(app).get('/api/accounts/acc-1/transactions?refresh=true')
-    expect(res.status).toBe(status)
+    expect(res.status).toBe(401)
+    expect(res.body.code).toBe('SESSION_ENDED')
   })
 
   it('fails as before when the bank is down and nothing is saved', async () => {
@@ -426,6 +444,115 @@ describe('GET /api/accounts/:uid/transactions (saved transactions)', () => {
 
     expect(res.status).toBe(200)
     expect(res.body.dateFrom).toBe(daysAgo(89))
+  })
+})
+
+describe('when the bank connection ends', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000
+  let sessionStatus: string | Error
+  let bankRefuses: boolean
+
+  function connect(uid: string, validForMs = DAY_MS): void {
+    sessionStore.setCurrentSession({
+      sessionId: `session-${uid}`,
+      accounts: [{ uid, identification_hash: 'same-account' }],
+      validUntil: new Date(Date.now() + validForMs).toISOString(),
+      bank: { name: 'Nordea', country: 'FI' },
+    })
+  }
+
+  const bankCalls = () => calls.filter((call) => call.path.startsWith('/accounts/'))
+  const status = async () => (await request(app).get('/api/auth/status')).body
+
+  beforeEach(() => {
+    sessionStatus = 'AUTHORIZED'
+    bankRefuses = false
+    calls = fakeBank((call) => {
+      if (call.path.startsWith('/sessions/')) {
+        if (sessionStatus instanceof Error) return json({ message: 'down' }, 503)
+        return json({ status: sessionStatus })
+      }
+      if (bankRefuses) return json({ message: 'refused' }, 401)
+      if (call.path.endsWith('/balances')) return json({ balances: [] })
+      if (call.path.endsWith('/transactions')) {
+        return json({ transactions: [{ entry_reference: 'saved', booking_date: new Date().toISOString().slice(0, 10) }] })
+      }
+      return json({ message: 'not found' }, 404)
+    })
+    connect('acc-1')
+  })
+
+  it('confirms with Enable Banking, then reports a revoked session to the client', async () => {
+    bankRefuses = true
+    sessionStatus = 'REVOKED'
+
+    const res = await request(app).get('/api/accounts/acc-1/balances')
+
+    expect(res.status).toBe(401)
+    expect(res.body.code).toBe('SESSION_ENDED')
+    expect(await status()).toMatchObject({ connected: false, ended: 'revoked', bank: { name: 'Nordea', country: 'FI' } })
+  })
+
+  it("passes the bank's error through when the session is still authorized (e.g. our JWT was rejected)", async () => {
+    bankRefuses = true
+
+    const res = await request(app).get('/api/accounts/acc-1/balances')
+
+    expect(res.status).toBe(401)
+    expect(res.body.code).toBeUndefined()
+    expect(await status()).toMatchObject({ connected: true, ended: null })
+  })
+
+  it("passes the bank's error through when the session check itself fails", async () => {
+    bankRefuses = true
+    sessionStatus = new Error('down')
+
+    const res = await request(app).get('/api/accounts/acc-1/balances')
+
+    expect(res.status).toBe(401)
+    expect(res.body.code).toBeUndefined()
+    expect((await status()).connected).toBe(true)
+  })
+
+  it.each([
+    ['revoked', () => sessionStore.markEnded('session-acc-1', 'revoked')],
+    ['expired', () => connect('acc-1', -1000)],
+  ])('once %s, serves saved data read-only without asking the bank', async (reason, end) => {
+    await request(app).get('/api/accounts/acc-1/transactions')
+    await request(app).put('/api/accounts/acc-1/budgets/groceries').send({ amount: 100 })
+    end()
+    const before = bankCalls().length
+
+    expect(await status()).toMatchObject({ connected: false, ended: reason })
+    expect((await request(app).get('/api/accounts')).body).toEqual([{ uid: 'acc-1', identification_hash: 'same-account' }])
+
+    const transactions = await request(app).get('/api/accounts/acc-1/transactions?refresh=true')
+    expect(transactions.status).toBe(200)
+    expect(transactions.body.transactions).toHaveLength(1)
+
+    const balances = await request(app).get('/api/accounts/acc-1/balances')
+    expect(balances.body.code).toBe('SESSION_ENDED')
+
+    // Budgets are our own data, so they still work.
+    expect((await request(app).put('/api/accounts/acc-1/budgets/travel').send({ amount: 50 })).status).toBe(200)
+    expect(bankCalls()).toHaveLength(before)
+  })
+
+  it('reports SESSION_ENDED for transactions when nothing was saved', async () => {
+    sessionStore.markEnded('session-acc-1', 'closed')
+    const res = await request(app).get('/api/accounts/acc-1/transactions')
+    expect(res.body.code).toBe('SESSION_ENDED')
+  })
+
+  it('is live again after reconnecting, with the saved history', async () => {
+    await request(app).get('/api/accounts/acc-1/transactions')
+    sessionStore.markEnded('session-acc-1', 'revoked')
+
+    connect('acc-2')
+
+    expect(await status()).toMatchObject({ connected: true, ended: null })
+    const res = await request(app).get('/api/accounts/acc-2/transactions')
+    expect(res.body.transactions.map((t: { entry_reference: string }) => t.entry_reference)).toContain('saved')
   })
 })
 

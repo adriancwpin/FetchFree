@@ -104,3 +104,38 @@ describe('bank sessions', () => {
     expect(sessionStore.getCurrentSession()).toBeNull()
   })
 })
+
+describe('ended sessions', () => {
+  it('keeps an ended session as the latest, with its reason, but not as the live one', () => {
+    sessionStore.setCurrentSession({ sessionId: 's1', accounts: [{ uid: 'acc-1' }], validUntil: inDays(10), bank: NORDEA })
+    sessionStore.markEnded('s1', 'revoked')
+
+    expect(sessionStore.getCurrentSession()).toBeNull()
+    expect(sessionStore.getLatestSession()).toMatchObject({ sessionId: 's1', bank: NORDEA, ended: 'revoked' })
+  })
+
+  it('reports a session past its valid_until as expired', () => {
+    sessionStore.setCurrentSession({ sessionId: 's1', accounts: [], validUntil: inDays(-1), bank: NORDEA })
+    expect(sessionStore.getLatestSession()?.ended).toBe('expired')
+  })
+
+  it('reports a live session as not ended', () => {
+    sessionStore.setCurrentSession({ sessionId: 's1', accounts: [], validUntil: inDays(1), bank: null })
+    expect(sessionStore.getLatestSession()?.ended).toBeNull()
+  })
+
+  it("doesn't try to revoke an ended session at the bank", () => {
+    sessionStore.setCurrentSession({ sessionId: 's1', accounts: [], validUntil: inDays(10), bank: null })
+    sessionStore.markEnded('s1', 'closed')
+
+    expect(sessionStore.clearSessions()).toEqual([])
+  })
+
+  it('is replaced by the next connection', () => {
+    sessionStore.setCurrentSession({ sessionId: 's1', accounts: [], validUntil: inDays(10), bank: null })
+    sessionStore.markEnded('s1', 'revoked')
+    sessionStore.setCurrentSession({ sessionId: 's2', accounts: [], validUntil: inDays(10), bank: null })
+
+    expect(sessionStore.getLatestSession()).toMatchObject({ sessionId: 's2', ended: null })
+  })
+})

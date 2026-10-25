@@ -41,10 +41,13 @@ function redirectToClient(res: Response, params: Record<string, string>): void {
 
 export const authRouter = Router()
 
+// `ended` says why the latest connection can't be used any more ("expired", "revoked"…); the
+// client then shows saved data read-only with a "Reconnect your bank" banner.
 authRouter.get('/status', (_req, res) => {
-  const session = sessionStore.getCurrentSession()
+  const session = sessionStore.getLatestSession()
   res.json({
-    connected: session !== null,
+    connected: session !== null && session.ended === null,
+    ended: session?.ended ?? null,
     validUntil: session?.validUntil ?? null,
     bank: session?.bank ?? null,
     // Where the client sends the browser to start a bank login.

@@ -5,7 +5,7 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useBanks, useCountries } from '@/hooks/useBank'
-import type { Bank } from '@/lib/api'
+import { bankLoginHref, type Bank } from '@/lib/api'
 import { countryName, normalise } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -77,9 +77,7 @@ export function ConnectBank({ loginUrl, error }: { loginUrl: string; error: stri
     setSearch('')
   }
 
-  const href = selectedBank
-    ? `${loginUrl}?${new URLSearchParams({ bank: selectedBank.name, country: selectedBank.country })}`
-    : undefined
+  const href = selectedBank ? bankLoginHref(loginUrl, selectedBank) : undefined
 
   return (
     <Card className="w-full max-w-md">

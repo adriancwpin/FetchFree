@@ -5,6 +5,7 @@ import { EnableBankingError } from './enableBankingClient.js'
 import { authRouter, callbackRouter } from './routes/auth.js'
 import { accountsRouter } from './routes/accounts.js'
 import { banksRouter } from './routes/banks.js'
+import { SessionEndedError } from './sessionEnded.js'
 
 // The Express app without a listener, so tests can call it directly (server.ts does the listening).
 export const app = express()
@@ -19,6 +20,10 @@ app.use('/api/banks', banksRouter)
 app.use(callbackRouter)
 
 const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  if (err instanceof SessionEndedError) {
+    res.status(401).json({ error: err.message, code: err.code })
+    return
+  }
   if (err instanceof EnableBankingError) {
     console.error(err.message, err.body)
     res.status(err.status).json({ error: err.message, details: err.body })

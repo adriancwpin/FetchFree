@@ -39,7 +39,7 @@ export function useDisconnect() {
       // Switch to the disconnected view first, so the account queries are unmounted
       // before they're removed (otherwise they refetch and flash a "no session" error).
       queryClient.setQueryData(['status'], (status: api.Status | undefined) =>
-        status && { ...status, connected: false, validUntil: null },
+        status && { ...status, connected: false, ended: null, validUntil: null },
       )
       queryClient.removeQueries({ queryKey: ['accounts'] })
     },
@@ -50,10 +50,12 @@ export function useAccounts() {
   return useQuery({ queryKey: ['accounts'], queryFn: api.getAccounts, ...BANK_QUERY_OPTIONS })
 }
 
-export function useBalances(accountUid: string) {
+// Not `enabled` once the bank connection has ended: balances only ever come live from the bank.
+export function useBalances(accountUid: string, { enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['accounts', accountUid, 'balances'],
     queryFn: () => api.getBalances(accountUid),
+    enabled,
     ...BANK_QUERY_OPTIONS,
   })
 }
