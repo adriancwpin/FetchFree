@@ -13,6 +13,20 @@ export function monthLabel(month: string, style: 'short' | 'long' = 'short'): st
   })
 }
 
+const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+
+// "just now", "3 minutes ago", "yesterday"… for an ISO time in the past.
+export function timeAgo(iso: string, now: Date = new Date()): string {
+  const seconds = Math.round((new Date(iso).getTime() - now.getTime()) / 1000)
+  if (Number.isNaN(seconds)) return iso
+  if (seconds > -60) return 'just now'
+  const minutes = Math.round(seconds / 60)
+  if (minutes > -60) return relativeTime.format(minutes, 'minute')
+  const hours = Math.round(minutes / 60)
+  if (hours > -24) return relativeTime.format(hours, 'hour')
+  return relativeTime.format(Math.round(hours / 24), 'day')
+}
+
 const regionNames = new Intl.DisplayNames(undefined, { type: 'region' })
 
 // "FI" → "Finland". Intl throws on a malformed code, so fall back to the code itself.

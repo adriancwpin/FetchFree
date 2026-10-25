@@ -54,7 +54,7 @@ function redirectParams(location: string): URLSearchParams {
 let calls: FakeCall[]
 
 beforeEach(() => {
-  db.exec('DELETE FROM pending_auths; DELETE FROM bank_sessions;')
+  db.exec('DELETE FROM pending_auths; DELETE FROM bank_sessions; DELETE FROM transactions; DELETE FROM account_syncs;')
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   calls = fakeEnableBanking()
@@ -207,6 +207,225 @@ describe('account routes', () => {
     const balances = calls.find((call) => call.path === '/accounts/acc-1/balances')
     expect(balances?.headers).toMatchObject({ 'Psu-User-Agent': 'TestBrowser/1.0' })
     expect(balances?.headers['Psu-Ip-Address']).toBeTruthy()
+  })
+})
+
+describe('GET /api/accounts/:uid/transactions (saved transactions)', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000
+  const today = () => new Date().toISOString().slice(0, 10)
+  const daysAgo = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10)
+
+  // What the fake bank currently holds for the account, and how it answers.
+  let bankTransactions: { entry_reference: string; booking_date: string; status: string }[]
+  // An HTTP status the bank answers every transactions request with, e.g. 503 when it's down.
+  let bankFailsWith: number | null
+  let refuseOlderThanDays: number | null
+  // Makes the bank repeat its continuation_key, so paging stops early (truncated).
+  let repeatPages: boolean
+  // While set, the bank holds its answers until this resolves.
+  let bankGate: Promise<void> | null
+
+  function connect(uid: string): void {
+    sessionStore.setCurrentSession({
+      sessionId: `session-${uid}`,
+      accounts: [{ uid, identification_hash: 'same-account' }],
+      validUntil: new Date(Date.now() + DAY_MS).toISOString(),
+      bank: null,
+    })
+  }
+
+  const transactionCalls = () => calls.filter((call) => call.path.endsWith('/transactions'))
+
+  beforeEach(() => {
+    bankTransactions = [{ entry_reference: 'recent', booking_date: daysAgo(2), status: 'BOOK' }]
+    bankFailsWith = null
+    refuseOlderThanDays = null
+    repeatPages = false
+    bankGate = null
+    calls = fakeBank(async (call) => {
+      if (!call.path.endsWith('/transactions')) return json({ message: 'not found' }, 404)
+      if (bankGate) await bankGate
+      if (bankFailsWith) return json({ message: 'failed' }, bankFailsWith)
+      const from = call.query.get('date_from')!
+      if (refuseOlderThanDays !== null && from < daysAgo(refuseOlderThanDays)) return json({ message: 'too old' }, 400)
+      const transactions = bankTransactions.filter((transaction) => transaction.booking_date >= from)
+      return json(repeatPages ? { transactions, continuation_key: 'same-key' } : { transactions })
+    })
+    connect('acc-1')
+  })
+
+  it('fetches the 6-month window the first time and saves it', async () => {
+    const res = await request(app).get('/api/accounts/acc-1/transactions')
+
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ dateTo: today(), truncated: false, syncError: null })
+    expect(res.body.dateFrom).toMatch(/^\d{4}-\d{2}-01$/)
+    expect(transactionCalls()[0]!.query.get('date_from')).toBe(res.body.dateFrom)
+    expect(res.body.transactions).toEqual(bankTransactions)
+    expect(res.body.lastSyncedAt).toBeTruthy()
+  })
+
+  it("answers from the saved copy without asking the bank while it's fresh", async () => {
+    await request(app).get('/api/accounts/acc-1/transactions')
+    const res = await request(app).get('/api/accounts/acc-1/transactions')
+
+    expect(res.body.transactions).toHaveLength(1)
+    expect(transactionCalls()).toHaveLength(1)
+  })
+
+  it('on refresh, asks only for the days since the last sync (with overlap)', async () => {
+    await request(app).get('/api/accounts/acc-1/transactions')
+    bankTransactions.push({ entry_reference: 'new', booking_date: today(), status: 'BOOK' })
+
+    const res = await request(app).get('/api/accounts/acc-1/transactions?refresh=true')
+
+    expect(transactionCalls()).toHaveLength(2)
+    expect(transactionCalls()[1]!.query.get('date_from')).toBe(daysAgo(7))
+    expect(res.body.transactions.map((t: { entry_reference: string }) => t.entry_reference)).toEqual(['recent', 'new'])
+  })
+
+  it('syncs again by itself once the saved copy is older than 15 minutes', async () => {
+    await request(app).get('/api/accounts/acc-1/transactions')
+    db.prepare('UPDATE account_syncs SET last_synced_at = ?').run(new Date(Date.now() - 16 * 60 * 1000).toISOString())
+
+    await request(app).get('/api/accounts/acc-1/transactions')
+    expect(transactionCalls()).toHaveLength(2)
+  })
+
+  it('shows the saved transactions with a note when the bank is down', async () => {
+    await request(app).get('/api/accounts/acc-1/transactions')
+    bankFailsWith = 503
+
+    const res = await request(app).get('/api/accounts/acc-1/transactions?refresh=true')
+
+    expect(res.status).toBe(200)
+    expect(res.body.transactions).toHaveLength(1)
+    expect(res.body.syncError).toMatch(/503/)
+  })
+
+  it("doesn't ask a failing bank again on every load, but Refresh still does", async () => {
+    await request(app).get('/api/accounts/acc-1/transactions')
+    db.prepare('UPDATE account_syncs SET last_synced_at = ?').run(new Date(Date.now() - 16 * 60 * 1000).toISOString())
+    bankFailsWith = 503
+
+    await request(app).get('/api/accounts/acc-1/transactions')
+    const res = await request(app).get('/api/accounts/acc-1/transactions')
+    expect(transactionCalls()).toHaveLength(2)
+    expect(res.body.syncError).toMatch(/503/)
+
+    bankFailsWith = null
+    const refreshed = await request(app).get('/api/accounts/acc-1/transactions?refresh=true')
+    expect(transactionCalls()).toHaveLength(3)
+    expect(refreshed.body.syncError).toBeNull()
+  })
+
+  it.each([401, 403])("passes a %i through even with saved data, so the user knows to reconnect", async (status) => {
+    await request(app).get('/api/accounts/acc-1/transactions')
+    bankFailsWith = status
+
+    const res = await request(app).get('/api/accounts/acc-1/transactions?refresh=true')
+    expect(res.status).toBe(status)
+  })
+
+  it('fails as before when the bank is down and nothing is saved', async () => {
+    bankFailsWith = 503
+    const res = await request(app).get('/api/accounts/acc-1/transactions')
+    expect(res.status).toBe(503)
+  })
+
+  it('after a sync whose paging stopped early, fetches everything again until it completes', async () => {
+    repeatPages = true
+    const first = await request(app).get('/api/accounts/acc-1/transactions')
+    expect(first.body.truncated).toBe(true)
+
+    repeatPages = false
+    const second = await request(app).get('/api/accounts/acc-1/transactions?refresh=true')
+
+    expect(transactionCalls().at(-1)!.query.get('date_from')).toBe(first.body.dateFrom)
+    expect(second.body.truncated).toBe(false)
+  })
+
+  it('clears the warning once a repair completes, even if the bank no longer goes back 6 months', async () => {
+    repeatPages = true
+    const first = await request(app).get('/api/accounts/acc-1/transactions')
+    expect(first.body.truncated).toBe(true)
+
+    repeatPages = false
+    refuseOlderThanDays = 89
+    const second = await request(app).get('/api/accounts/acc-1/transactions?refresh=true')
+
+    // The part it couldn't re-check is reported as possibly missing instead.
+    expect(second.body.truncated).toBe(false)
+    expect(second.body.gap).toEqual({ from: first.body.dateFrom, to: daysAgo(89) })
+  })
+
+  it('reaches back to the oldest saved pending transaction, so its booked version replaces it', async () => {
+    bankTransactions = [{ entry_reference: 'pending', booking_date: daysAgo(20), status: 'PDNG' }]
+    await request(app).get('/api/accounts/acc-1/transactions')
+
+    bankTransactions = [{ entry_reference: 'booked', booking_date: daysAgo(20), status: 'BOOK' }]
+    const res = await request(app).get('/api/accounts/acc-1/transactions?refresh=true')
+
+    expect(transactionCalls().at(-1)!.query.get('date_from')).toBe(daysAgo(20))
+    expect(res.body.transactions.map((t: { entry_reference: string }) => t.entry_reference)).toEqual(['booked'])
+  })
+
+  it('shares one bank fetch between requests that arrive together', async () => {
+    let release!: () => void
+    bankGate = new Promise((resolve) => (release = resolve))
+    const both = Promise.all([
+      request(app).get('/api/accounts/acc-1/transactions'),
+      request(app).get('/api/accounts/acc-1/transactions?refresh=true'),
+    ])
+    // Wait until the first request has reached the bank, then give the second time to arrive.
+    await vi.waitFor(() => expect(transactionCalls()).toHaveLength(1))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    release()
+
+    const [a, b] = await both
+    expect(transactionCalls()).toHaveLength(1)
+    expect(a.body.transactions).toEqual(b.body.transactions)
+  })
+
+  it('only reports the part of a gap inside the window shown', async () => {
+    const first = await request(app).get('/api/accounts/acc-1/transactions')
+    db.prepare('UPDATE account_syncs SET gap_from = ?, gap_to = ?').run('2000-01-01', daysAgo(100))
+
+    const res = await request(app).get('/api/accounts/acc-1/transactions')
+    expect(res.body.gap).toEqual({ from: first.body.dateFrom, to: daysAgo(100) })
+  })
+
+  it('after a long break, keeps showing the older history and reports the missing dates', async () => {
+    bankTransactions = [{ entry_reference: 'old', booking_date: daysAgo(120), status: 'BOOK' }]
+    await request(app).get('/api/accounts/acc-1/transactions')
+    // Last synced 100 days ago; the bank now only goes back 89 days.
+    db.prepare('UPDATE account_syncs SET last_synced_at = ?').run(new Date(Date.now() - 100 * DAY_MS).toISOString())
+    refuseOlderThanDays = 89
+
+    const res = await request(app).get('/api/accounts/acc-1/transactions')
+
+    expect(res.body.transactions.map((t: { entry_reference: string }) => t.entry_reference)).toContain('old')
+    expect(res.body.gap).toEqual({ from: daysAgo(100), to: daysAgo(89) })
+  })
+
+  it('keeps the history when the bank is reconnected and the account gets a new uid', async () => {
+    bankTransactions = [{ entry_reference: 'old', booking_date: daysAgo(120), status: 'BOOK' }]
+    await request(app).get('/api/accounts/acc-1/transactions')
+
+    // The new login only allows ~90 days, so the bank no longer returns the old one.
+    connect('acc-2')
+    refuseOlderThanDays = 89
+    const res = await request(app).get('/api/accounts/acc-2/transactions?refresh=true')
+
+    expect(res.body.transactions.map((t: { entry_reference: string }) => t.entry_reference)).toEqual(['old'])
+  })
+
+  it('reports the shorter window when the bank refuses 6 months', async () => {
+    refuseOlderThanDays = 89
+    const res = await request(app).get('/api/accounts/acc-1/transactions')
+
+    expect(res.status).toBe(200)
+    expect(res.body.dateFrom).toBe(daysAgo(89))
   })
 })
 

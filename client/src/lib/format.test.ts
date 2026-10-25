@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countryName, formatAmount, formatUnsignedAmount } from '@/lib/format'
+import { countryName, formatAmount, formatUnsignedAmount, timeAgo } from '@/lib/format'
 
 describe('formatUnsignedAmount', () => {
   it('drops the sign, since the caller shows direction separately', () => {
@@ -24,5 +24,23 @@ describe('countryName', () => {
 
   it('returns the code itself instead of crashing on a malformed one', () => {
     expect(countryName('not a code')).toBe('not a code')
+  })
+})
+
+describe('timeAgo', () => {
+  const now = new Date('2026-10-25T12:00:00.000Z')
+  const before = (ms: number) => new Date(now.getTime() - ms).toISOString()
+
+  it.each([
+    [before(20_000), 'just now'],
+    [before(3 * 60_000), new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(-3, 'minute')],
+    [before(2 * 3_600_000), new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(-2, 'hour')],
+    [before(3 * 86_400_000), new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(-3, 'day')],
+  ])('describes %s relative to now', (iso, expected) => {
+    expect(timeAgo(iso, now)).toBe(expected)
+  })
+
+  it('passes an unreadable time through instead of showing NaN', () => {
+    expect(timeAgo('not a time', now)).toBe('not a time')
   })
 })

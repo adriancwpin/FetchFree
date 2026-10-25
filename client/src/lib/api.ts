@@ -137,13 +137,22 @@ const transactionsResponseSchema = z.object({
   dateTo: z.string(),
   // True when the server hit its page cap and older transactions may be missing.
   truncated: z.boolean(),
+  // The server answers from its saved copy: when it last got them from the bank (ISO time), and
+  // why it couldn't just now, if it tried and failed.
+  lastSyncedAt: z.string(),
+  syncError: z.string().nullable(),
+  // Dates in the window with nothing saved (`to` exclusive), left when the bank could no longer go
+  // back far enough after a long break.
+  gap: z.object({ from: z.string(), to: z.string() }).nullable(),
 })
 
 export type TransactionsResponse = z.infer<typeof transactionsResponseSchema>
 
-export function getTransactions(accountUid: string) {
+// `refresh` asks the server to check with the bank even if its saved copy is recent.
+export function getTransactions(accountUid: string, options: { refresh?: boolean } = {}) {
+  const query = options.refresh ? '?refresh=true' : ''
   return request(
-    `/api/accounts/${encodeURIComponent(accountUid)}/transactions`,
+    `/api/accounts/${encodeURIComponent(accountUid)}/transactions${query}`,
     transactionsResponseSchema,
   )
 }

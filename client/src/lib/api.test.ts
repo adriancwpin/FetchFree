@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, getStatus } from '@/lib/api'
+import { ApiError, getStatus, getTransactions } from '@/lib/api'
 
 function respond(body: unknown, status = 200) {
   vi.stubGlobal('fetch', async () => new Response(JSON.stringify(body), { status }))
@@ -45,5 +45,29 @@ describe('API errors and the retry policy', () => {
     respond(status)
 
     expect(await getStatus()).toEqual(status)
+  })
+})
+
+describe('getTransactions', () => {
+  it('asks the server to check with the bank only when refreshing', async () => {
+    const response = {
+      transactions: [],
+      dateFrom: '2026-05-01',
+      dateTo: '2026-10-25',
+      truncated: false,
+      lastSyncedAt: '2026-10-25T12:00:00.000Z',
+      syncError: 'Enable Banking request failed with status 503',
+      gap: { from: '2026-07-20', to: '2026-07-28' },
+    }
+    const fetchSpy = vi.fn(async (_path: string) => new Response(JSON.stringify(response)))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    expect(await getTransactions('acc 1')).toEqual(response)
+    await getTransactions('acc 1', { refresh: true })
+
+    expect(fetchSpy.mock.calls.map(([path]) => path)).toEqual([
+      '/api/accounts/acc%201/transactions',
+      '/api/accounts/acc%201/transactions?refresh=true',
+    ])
   })
 })

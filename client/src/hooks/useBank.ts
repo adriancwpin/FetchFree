@@ -65,3 +65,13 @@ export function useTransactions(accountUid: string) {
     ...BANK_QUERY_OPTIONS,
   })
 }
+
+// The Refresh button: has the server check with the bank now, then shows the result everywhere
+// the account's transactions are used.
+export function useRefreshTransactions(accountUid: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.getTransactions(accountUid, { refresh: true }),
+    onSuccess: (data) => queryClient.setQueryData(['accounts', accountUid, 'transactions'], data),
+  })
+}
