@@ -39,6 +39,7 @@ it('adds the newer columns to a database from an older version without losing th
     expect(columnsOf(table)).toEqual(expect.arrayContaining(['aspsp_name', 'aspsp_country']))
   }
   expect(columnsOf('bank_sessions')).toContain('ended_reason')
+  expect(columnsOf('category_rules')).toEqual(['account_key', 'direction', 'payee', 'category'])
   expect(sessionStore.getLatestSession()).toMatchObject({ sessionId: 'legacy-session', bank: null, ended: null })
   db.close()
 })

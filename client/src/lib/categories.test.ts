@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { Transaction, TransactionsResponse } from '@/lib/api'
-import { breakdownByCategory, CATEGORIES, categorize, type CategoryId, RULES, transactionsFor } from '@/lib/categories'
+import {
+  breakdownByCategory,
+  CATEGORIES,
+  categorize,
+  type CategoryId,
+  describe as describeTransaction,
+  MAX_PAYEE_KEY_LENGTH,
+  payeeOf,
+  ruleMap,
+  RULES,
+  transactionsFor,
+} from '@/lib/categories'
 import { countedTransactions, summarizeByMonth } from '@/lib/summary'
 
 interface Example {
@@ -211,5 +222,98 @@ describe('transactionsFor (what the filtered table shows)', () => {
       ]),
     )
     expect(transactionsFor(counted, { direction: 'out', category: 'groceries', month: '2026-10' })).toHaveLength(1)
+  })
+})
+
+describe('your own categories (rules per payee)', () => {
+  const response = (transactions: Transaction[]): TransactionsResponse => ({
+    transactions,
+    dateFrom: '2026-05-01',
+    dateTo: '2026-10-22',
+    truncated: false,
+    lastSyncedAt: '2026-10-22T12:00:00.000Z',
+    syncError: null,
+    gap: null,
+  })
+
+  it('overrides the automatic category for everything from that payee', () => {
+    const rules = ruleMap([{ direction: 'out', payee: 'k market', category: 'eatingOut' }])
+    expect(categorize(tx({ direction: 'out', counterparty: 'K market' }))).toBe('groceries')
+    expect(categorize(tx({ direction: 'out', counterparty: 'K market' }), rules)).toBe('eatingOut')
+    expect(categorize(tx({ direction: 'out', counterparty: 'Lidl' }), rules)).toBe('groceries')
+  })
+
+  it('matches the payee ignoring case, accents and extra spaces, keeping numbers in a name', () => {
+    expect(payeeOf(tx({ direction: 'out', counterparty: '  ÖSTGÖTA   Kauppa 12 ' }))).toEqual({
+      direction: 'out',
+      source: 'name',
+      key: 'ostgota kauppa 12',
+      label: 'ÖSTGÖTA   Kauppa 12',
+    })
+  })
+
+  it('matches a payment message on its words alone, so changing references still match', () => {
+    const october = payeeOf(tx({ direction: 'in', message: 'LAPSILISA 10/2026 REF 12345' }))
+    const november = payeeOf(tx({ direction: 'in', message: 'Lapsilisä 11/2026 ref 12399' }))
+    expect(october).toMatchObject({ source: 'message', key: 'lapsilisa ref' })
+    expect(november?.key).toBe(october?.key)
+  })
+
+  it('falls back to the message when the name is blank', () => {
+    const blankName = { ...tx({ direction: 'out', message: 'Vuokra lokakuu' }), creditor: { name: '  ' } }
+    expect(payeeOf(blankName)).toMatchObject({ source: 'message', key: 'vuokra lokakuu' })
+    expect(describeTransaction(blankName)).toBe('Vuokra lokakuu')
+  })
+
+  it('has no payee when there is nothing to match on, but still describes a numbers-only message', () => {
+    expect(payeeOf(tx({ direction: 'out' }))).toBeNull()
+    expect(describeTransaction(tx({ direction: 'out' }))).toBeNull()
+    expect(payeeOf(tx({ direction: 'out', message: '18110005577890' }))).toBeNull()
+    expect(describeTransaction(tx({ direction: 'out', message: '18110005577890' }))).toBe('18110005577890')
+  })
+
+  it('keeps keys within what the server accepts, without splitting a character', () => {
+    const long = payeeOf(tx({ direction: 'out', counterparty: 'Oy ' + 'x'.repeat(300) }))
+    expect(long?.key).toHaveLength(MAX_PAYEE_KEY_LENGTH)
+    // 199 single-unit letters, then a letter that takes two UTF-16 units across the cut.
+    const split = payeeOf(tx({ direction: 'out', counterparty: 'a'.repeat(199) + '𠀋' }))
+    expect(split?.key).toBe('a'.repeat(199))
+  })
+
+  it('ignores rules for the other direction and for unknown categories', () => {
+    const rules = ruleMap([
+      { direction: 'out', payee: 'k market', category: 'salary' },
+      { direction: 'in', payee: 'k market', category: 'eatingOut' },
+      { direction: 'out', payee: 'lidl', category: 'notACategory' },
+    ])
+    expect(rules.size).toBe(0)
+    expect(categorize(tx({ direction: 'out', counterparty: 'K market' }), rules)).toBe('groceries')
+  })
+
+  it('applies to money in and money out separately', () => {
+    const rules = ruleMap([{ direction: 'in', payee: 'salo johanna', category: 'salary' }])
+    expect(categorize(tx({ direction: 'in', counterparty: 'Salo Johanna' }), rules)).toBe('salary')
+    expect(categorize(tx({ direction: 'out', counterparty: 'Salo Johanna' }), rules)).toBe('toPeople')
+  })
+
+  it('moves totals between categories without changing what adds up to the summary', () => {
+    const sample = response([
+      tx({ direction: 'out', counterparty: 'K market', amount: '19.99' }),
+      tx({ direction: 'out', counterparty: 'K market', amount: '5.01' }),
+      tx({ direction: 'out', counterparty: 'Lidl', amount: '10.00' }),
+      tx({ direction: 'in', counterparty: 'KELA/FPA', amount: '100.00' }),
+    ])
+    const counted = countedTransactions(sample)
+    const rules = ruleMap([{ direction: 'out', payee: 'k market', category: 'eatingOut' }])
+
+    const rows = breakdownByCategory(counted, 'out', undefined, rules)
+    expect(rows.map((row) => [row.category, row.amount, row.count])).toEqual([
+      ['eatingOut', 25, 2],
+      ['groceries', 10, 1],
+    ])
+    expect(rows.reduce((cents, row) => cents + Math.round(row.amount * 100), 0) / 100).toBe(
+      summarizeByMonth(sample).totalOut,
+    )
+    expect(transactionsFor(counted, { direction: 'out', category: 'eatingOut' }, rules)).toHaveLength(2)
   })
 })

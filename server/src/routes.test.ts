@@ -55,7 +55,7 @@ function redirectParams(location: string): URLSearchParams {
 let calls: FakeCall[]
 
 beforeEach(() => {
-  db.exec('DELETE FROM pending_auths; DELETE FROM bank_sessions; DELETE FROM transactions; DELETE FROM account_syncs; DELETE FROM budgets;')
+  db.exec('DELETE FROM pending_auths; DELETE FROM bank_sessions; DELETE FROM transactions; DELETE FROM account_syncs; DELETE FROM budgets; DELETE FROM category_rules;')
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   calls = fakeEnableBanking()
@@ -583,8 +583,10 @@ describe('when the bank connection ends', () => {
     const balances = await request(app).get('/api/accounts/acc-1/balances')
     expect(balances.body.code).toBe('SESSION_ENDED')
 
-    // Budgets are our own data, so they still work.
+    // Budgets and category rules are our own data, so they still work.
     expect((await request(app).put('/api/accounts/acc-1/budgets/travel').send({ amount: 50 })).status).toBe(200)
+    const rule = { direction: 'out', payee: 'alepa', category: 'eatingOut' }
+    expect((await request(app).put('/api/accounts/acc-1/category-rules').send(rule)).status).toBe(200)
     expect(bankCalls()).toHaveLength(before)
   })
 
@@ -673,6 +675,79 @@ describe('budgets', () => {
   it("refuses an account that isn't in the current session", async () => {
     expect((await request(app).get('/api/accounts/someone-elses/budgets')).status).toBe(404)
     expect((await put('someone-elses', 'groceries', { amount: 10 })).status).toBe(404)
+  })
+})
+
+describe('category rules', () => {
+  function connect(uid: string): void {
+    sessionStore.setCurrentSession({
+      sessionId: `session-${uid}`,
+      accounts: [{ uid, identification_hash: 'same-account' }],
+      validUntil: new Date(Date.now() + 86_400_000).toISOString(),
+      bank: null,
+    })
+  }
+
+  const rulesPath = (uid: string) => `/api/accounts/${uid}/category-rules`
+  const put = (uid: string, body: unknown) => request(app).put(rulesPath(uid)).send(body as object)
+  const list = async (uid: string) => (await request(app).get(rulesPath(uid))).body as unknown[]
+
+  beforeEach(() => connect('acc-1'))
+
+  it('saves, lists, replaces and removes a rule', async () => {
+    const alepa = { direction: 'out', payee: 'alepa kamppi', category: 'eatingOut' }
+    expect((await put('acc-1', alepa)).body).toEqual(alepa)
+    await put('acc-1', { direction: 'in', payee: 'alepa kamppi', category: 'fromPeople' })
+    await put('acc-1', { ...alepa, category: 'groceries' })
+
+    expect(await list('acc-1')).toEqual([
+      { direction: 'in', payee: 'alepa kamppi', category: 'fromPeople' },
+      { direction: 'out', payee: 'alepa kamppi', category: 'groceries' },
+    ])
+
+    const removed = await request(app).delete(rulesPath('acc-1')).send({ direction: 'out', payee: 'alepa kamppi' })
+    expect(removed.status).toBe(204)
+    expect(await list('acc-1')).toEqual([{ direction: 'in', payee: 'alepa kamppi', category: 'fromPeople' }])
+  })
+
+  it('keeps rules when the bank is reconnected and the account gets a new uid', async () => {
+    await put('acc-1', { direction: 'out', payee: 'alepa', category: 'eatingOut' })
+    connect('acc-2')
+
+    expect(await list('acc-2')).toEqual([{ direction: 'out', payee: 'alepa', category: 'eatingOut' }])
+  })
+
+  it.each([
+    ['an unknown direction', { direction: 'sideways', payee: 'alepa', category: 'eatingOut' }],
+    ['no direction', { payee: 'alepa', category: 'eatingOut' }],
+    ['an empty payee', { direction: 'out', payee: '  ', category: 'eatingOut' }],
+    ['a payee that is not text', { direction: 'out', payee: 42, category: 'eatingOut' }],
+    ['too long a payee', { direction: 'out', payee: 'x'.repeat(201), category: 'eatingOut' }],
+    ['a malformed category', { direction: 'out', payee: 'alepa', category: 'Not-A-Category' }],
+    ['no category', { direction: 'out', payee: 'alepa' }],
+  ])('rejects %s with 400', async (_case, body) => {
+    const res = await put('acc-1', body)
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBeTruthy()
+    expect(await list('acc-1')).toEqual([])
+  })
+
+  it('trims the payee, so a padded one is the same rule', async () => {
+    expect((await put('acc-1', { direction: 'out', payee: '  alepa ', category: 'eatingOut' })).body.payee).toBe('alepa')
+    await put('acc-1', { direction: 'out', payee: 'alepa', category: 'groceries' })
+    expect(await list('acc-1')).toEqual([{ direction: 'out', payee: 'alepa', category: 'groceries' }])
+
+    await request(app).delete(rulesPath('acc-1')).send({ direction: 'out', payee: ' alepa' })
+    expect(await list('acc-1')).toEqual([])
+  })
+
+  it('rejects removing a rule without saying which', async () => {
+    expect((await request(app).delete(rulesPath('acc-1')).send({ direction: 'out' })).status).toBe(400)
+  })
+
+  it("refuses an account that isn't in the current session", async () => {
+    expect((await request(app).get(rulesPath('someone-elses'))).status).toBe(404)
+    expect((await put('someone-elses', { direction: 'out', payee: 'alepa', category: 'eatingOut' })).status).toBe(404)
   })
 })
 

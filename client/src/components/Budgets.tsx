@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Pencil, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useBudgets, useDeleteBudget, useSetBudget, useTransactions } from '@/hooks/useBank'
+import { useBudgets, useCategoryRules, useDeleteBudget, useSetBudget, useTransactions } from '@/hooks/useBank'
 import { budgetProgress, monthOf, monthPace, type BudgetRow, type BudgetStatus } from '@/lib/budgets'
 import { CATEGORIES, type CategoryId, type CategorySelection } from '@/lib/categories'
 import { calendarDate, formatAmount, longDate, monthLabel } from '@/lib/format'
@@ -38,6 +38,7 @@ export function Budgets({
 }) {
   const transactions = useTransactions(accountUid)
   const budgets = useBudgets(accountUid)
+  const rules = useCategoryRules(accountUid)
   const setBudget = useSetBudget(accountUid)
   const deleteBudget = useDeleteBudget(accountUid)
   // A category id while editing that budget, 'new' while adding one.
@@ -57,12 +58,13 @@ export function Budgets({
     [transactions.data, accountCurrency],
   )
   const rows = useMemo(
-    () => (counted && budgets.data ? budgetProgress(counted, budgets.data, month, today) : []),
-    [counted, budgets.data, month, today],
+    () => (counted && budgets.data ? budgetProgress(counted, budgets.data, month, today, rules.data) : []),
+    [counted, budgets.data, month, today, rules.data],
   )
 
-  // Loading, errors and "no transactions" are shown by the table below.
-  if (!counted?.currency || counted.transactions.length === 0) return null
+  // Loading, errors and "no transactions" are shown by the table below. Waits for the user's own
+  // categories, which decide what each budget has spent.
+  if (!counted?.currency || counted.transactions.length === 0 || rules.isPending) return null
   const { currency } = counted
   const pace = monthPace(month, today)
   const unbudgeted = SPENDING_CATEGORIES.filter((category) => !rows.some((row) => row.category === category))

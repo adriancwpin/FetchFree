@@ -19,13 +19,14 @@ import {
   UtensilsCrossed,
   type LucideIcon,
 } from 'lucide-react'
-import type { Transaction } from '@/lib/api'
+import type { CategoryRule, Transaction } from '@/lib/api'
 import { normalise } from '@/lib/format'
 import { type CountedTransactions, dateOf, directionOf, toCents } from '@/lib/summary'
 
 // Banks rarely send a category (Nordea's merchant_category_code is always empty), so each
 // transaction is categorised from its text: who was paid, the payment message and the bank's own
 // transaction type. Rules are matched in order; the first match wins, so specific rules come first.
+// The user can override the result for everything from one payee (see CategoryRules below).
 
 export type Direction = 'in' | 'out'
 
@@ -143,6 +144,7 @@ function looksLikePerson(name: string | null | undefined): boolean {
   return words.every((word) => /^\p{Lu}[\p{L}'-]+$/u.test(word))
 }
 
+// May be blank: some banks send an empty name.
 function counterpartyOf(transaction: Transaction, direction: Direction): string | null {
   return (direction === 'out' ? transaction.creditor?.name : transaction.debtor?.name) ?? null
 }
@@ -175,17 +177,109 @@ function computeCategory(transaction: Transaction): CategoryId {
 }
 
 // The table, the breakdown and its filter all ask for the same transaction's category, often on
-// every render. Transactions are immutable objects from the query cache, so remember the answer
-// per object; entries disappear with the objects when the data is refetched.
+// every render. Transactions are immutable objects from the query cache, so remember the automatic
+// answer per object; entries disappear with the objects when the data is refetched. The user's
+// rules are looked up on top, every time, so nothing goes stale when they change.
 const categoryCache = new WeakMap<Transaction, CategoryId>()
 
-export function categorize(transaction: Transaction): CategoryId {
+function automaticCategory(transaction: Transaction): CategoryId {
   let category = categoryCache.get(transaction)
   if (category === undefined) {
     category = computeCategory(transaction)
     categoryCache.set(transaction, category)
   }
   return category
+}
+
+// Who a transaction is with, as the table shows it: the other party's name, or failing that the
+// payment message. Null when there's neither.
+function describeParts(transaction: Transaction): { direction: Direction; source: Payee['source']; label: string } | null {
+  // The same direction the automatic rules use.
+  const direction: Direction = directionOf(transaction) ?? 'out'
+  const name = counterpartyOf(transaction, direction)?.trim()
+  if (name) return { direction, source: 'name', label: name }
+  const message = (transaction.remittance_information ?? []).join(' ').trim()
+  return message ? { direction, source: 'message', label: message } : null
+}
+
+export function describe(transaction: Transaction): string | null {
+  return describeParts(transaction)?.label ?? null
+}
+
+// The server refuses longer payees (MAX_PAYEE_LENGTH in server/src/routes/accounts.ts).
+export const MAX_PAYEE_KEY_LENGTH = 200
+
+// What the user's rules match a transaction on. `key` ignores case, accents and spacing, so
+// "ALEPA  Kamppi" and "Alepa Kamppi" are one payee. A payment message often carries a reference,
+// date or invoice number that changes every time ("LAPSILISA 10/2026 REF 12345"), so a message is
+// matched on its words alone ("lapsilisa ref"); a name is matched as it is. Null when there's
+// nothing to match on, e.g. a message that is only a reference number.
+export interface Payee {
+  direction: Direction
+  source: 'name' | 'message'
+  key: string
+  label: string
+}
+
+function payeeKey(source: Payee['source'], label: string): string {
+  const text = source === 'message' ? normalise(label).replace(/[^\p{L}\s]/gu, ' ') : normalise(label)
+  return (
+    text
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, MAX_PAYEE_KEY_LENGTH)
+      // Don't leave half of a character that takes two UTF-16 units at the cut.
+      .replace(/[\uD800-\uDBFF]$/, '')
+      .trim()
+  )
+}
+
+const payeeCache = new WeakMap<Transaction, Payee | null>()
+
+function computePayee(transaction: Transaction): Payee | null {
+  const parts = describeParts(transaction)
+  if (!parts) return null
+  const key = payeeKey(parts.source, parts.label)
+  return key ? { ...parts, key } : null
+}
+
+export function payeeOf(transaction: Transaction): Payee | null {
+  let payee = payeeCache.get(transaction)
+  if (payee === undefined) {
+    payee = computePayee(transaction)
+    payeeCache.set(transaction, payee)
+  }
+  return payee
+}
+
+// The user's own categories: "out:alepa kamppi" → eatingOut. Built from the server's list by
+// ruleMap, which drops rules this client can't apply.
+export type CategoryRules = ReadonlyMap<string, CategoryId>
+
+function ruleKey(direction: Direction, payee: string): string {
+  return `${direction}:${payee}`
+}
+
+// Rules for an unknown category, or one from the other direction, are ignored: a rule can change
+// which kind of spending something is, but never turn spending into income.
+export function ruleMap(rules: readonly CategoryRule[]): CategoryRules {
+  const map = new Map<string, CategoryId>()
+  for (const rule of rules) {
+    if (!Object.hasOwn(CATEGORIES, rule.category)) continue
+    const category = rule.category as CategoryId
+    if (CATEGORIES[category].direction === rule.direction) map.set(ruleKey(rule.direction, rule.payee), category)
+  }
+  return map
+}
+
+// The user's category for this transaction's payee, if they set one.
+export function ruleFor(transaction: Transaction, rules: CategoryRules | undefined): CategoryId | undefined {
+  const payee = rules?.size ? payeeOf(transaction) : null
+  return payee ? rules?.get(ruleKey(payee.direction, payee.key)) : undefined
+}
+
+export function categorize(transaction: Transaction, rules?: CategoryRules): CategoryId {
+  return ruleFor(transaction, rules) ?? automaticCategory(transaction)
 }
 
 export interface CategorySelection {
@@ -198,13 +292,18 @@ export interface CategorySelection {
 
 // The counted transactions for one direction, optionally narrowed to a month and a category.
 // The breakdown totals these and the filtered table lists them, so a category's rows always add up
-// to the amount shown for it.
-export function transactionsFor(counted: CountedTransactions, selection: CategorySelection): Transaction[] {
+// to the amount shown for it. Rules only change which category a transaction is in, never whether
+// it's counted, so the totals still match the monthly summary.
+export function transactionsFor(
+  counted: CountedTransactions,
+  selection: CategorySelection,
+  rules?: CategoryRules,
+): Transaction[] {
   return counted.transactions.filter(
     (transaction) =>
       directionOf(transaction) === selection.direction &&
       (!selection.month || (dateOf(transaction) ?? '').startsWith(selection.month)) &&
-      (!selection.category || categorize(transaction) === selection.category),
+      (!selection.category || categorize(transaction, rules) === selection.category),
   )
 }
 
@@ -222,13 +321,14 @@ export function breakdownByCategory(
   counted: CountedTransactions,
   direction: Direction,
   month?: string,
+  rules?: CategoryRules,
 ): CategoryTotal[] {
   const totals = new Map<CategoryId, { cents: number; count: number }>()
   let totalCents = 0
 
   for (const transaction of transactionsFor(counted, { direction, month })) {
     const cents = toCents(transaction.transaction_amount.amount)
-    const category = categorize(transaction)
+    const category = categorize(transaction, rules)
     const entry = totals.get(category) ?? { cents: 0, count: 0 }
     entry.cents += cents
     entry.count++

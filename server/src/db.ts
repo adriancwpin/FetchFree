@@ -3,7 +3,8 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { config } from './config.js'
 
-// All SQL lives here and in the stores (sessionStore.ts, transactionStore.ts, budgetStore.ts), so
+// All SQL lives here and in the stores (sessionStore.ts, transactionStore.ts, budgetStore.ts,
+// categoryRuleStore.ts), so
 // moving to Postgres later only touches these files.
 
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true })
@@ -60,6 +61,15 @@ db.exec(`
     category TEXT NOT NULL,
     amount_cents INTEGER NOT NULL,
     PRIMARY KEY (account_key, category)
+  );
+
+  -- The user's own category for everything from one payee (see categoryRuleStore.ts).
+  CREATE TABLE IF NOT EXISTS category_rules (
+    account_key TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    payee TEXT NOT NULL,
+    category TEXT NOT NULL,
+    PRIMARY KEY (account_key, direction, payee)
   );
 `)
 
