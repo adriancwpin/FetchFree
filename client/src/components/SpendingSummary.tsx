@@ -1,5 +1,6 @@
+import { useMemo } from 'react'
 import { useTransactions } from '@/hooks/useBank'
-import { formatAmount } from '@/lib/format'
+import { formatAmount, monthLabel } from '@/lib/format'
 import { summarizeByMonth, type MonthSummary } from '@/lib/summary'
 import { cn } from '@/lib/utils'
 
@@ -22,13 +23,6 @@ function longDate(date: string): string {
   return new Date(year ?? 0, (month ?? 1) - 1, day ?? 1).toLocaleDateString(undefined, { dateStyle: 'medium' })
 }
 
-function monthLabel(month: string, style: 'short' | 'long' = 'short'): string {
-  const [year, monthIndex] = month.split('-').map(Number)
-  return new Date(year ?? 0, (monthIndex ?? 1) - 1, 1).toLocaleString(undefined, {
-    month: style,
-    ...(style === 'long' ? { year: 'numeric' } : {}),
-  })
-}
 
 function formatCompact(value: number, currency: string): string {
   try {
@@ -59,11 +53,15 @@ export function SpendingSummary({
   accountCurrency: string | null
 }) {
   const transactions = useTransactions(accountUid)
+  // Recomputed only when the data changes, not on every click in the category breakdown.
+  const summary = useMemo(
+    () => (transactions.data ? summarizeByMonth(transactions.data, accountCurrency) : null),
+    [transactions.data, accountCurrency],
+  )
 
   // Loading/error and "no transactions at all" are shown by TransactionsTable below.
-  if (!transactions.data || transactions.data.transactions.length === 0) return null
+  if (!transactions.data || !summary || transactions.data.transactions.length === 0) return null
 
-  const summary = summarizeByMonth(transactions.data, accountCurrency)
   const { currency } = summary
   const since = longDate(transactions.data.dateFrom)
   // Why some transactions in the table aren't in these totals.

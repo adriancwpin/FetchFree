@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Skeleton } from '@/components/ui/skeleton'
 import { useBanks, useCountries } from '@/hooks/useBank'
 import type { Bank } from '@/lib/api'
-import { countryName } from '@/lib/format'
+import { countryName, normalise } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 const LAST_BANK_KEY = 'fetchfree:lastBank'
@@ -44,11 +44,6 @@ function saveLastBank(choice: BankChoice): void {
   } catch {
     // Ignore: remembering the bank is only a convenience.
   }
-}
-
-// Case- and accent-insensitive, so "sparkasse" finds "Sparkasse" and "ostgota" finds "Östgöta".
-function normalise(text: string): string {
-  return text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
 }
 
 const lastBank = loadLastBank()

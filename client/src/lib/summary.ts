@@ -48,7 +48,7 @@ function isSettled(transaction: Transaction): boolean {
 }
 
 // Whole cents, so totals don't pick up floating-point error (e.g. a "−€0.00" net).
-function toCents(amount: string): number {
+export function toCents(amount: string): number {
   return Math.round(Math.abs(Number(amount)) * 100)
 }
 
@@ -100,10 +100,24 @@ function pickCurrency(settled: Transaction[], accountCurrency: string | null | u
   return mostCommonCurrency(settled) ?? accountCurrency ?? null
 }
 
-export function summarizeByMonth(
+export interface CountedTransactions {
+  // Settled transactions inside the window, in `currency`, with a usable amount: the set that
+  // every total (monthly chart, category breakdown) is built from.
+  transactions: Transaction[]
+  currency: string | null
+  // Every YYYY-MM the window covers, in order.
+  months: string[]
+  skipped: number
+  notYetSettled: number
+  notCounted: number
+}
+
+// Decides which transactions count towards totals. Shared by the monthly summary and the category
+// breakdown so their totals always agree.
+export function countedTransactions(
   { transactions, dateFrom, dateTo }: TransactionsResponse,
   accountCurrency?: string | null,
-): Summary {
+): CountedTransactions {
   // dateTo is the server's UTC date. Allow one extra day for users ahead of UTC (whose "today"
   // is already tomorrow there), but no further: a future-dated or bogus date (e.g. 9999-12-31)
   // must not stretch the chart with empty months.
@@ -116,23 +130,33 @@ export function summarizeByMonth(
   const notYetSettled = inWindow.filter((t) => t.status != null && NOT_YET_SETTLED_STATUSES.has(t.status)).length
 
   const currency = pickCurrency(settled, accountCurrency)
+  const counted = settled.filter(
+    (t) => t.transaction_amount.currency === currency && !Number.isNaN(toCents(t.transaction_amount.amount)),
+  )
   // Add the next month only if a transaction is actually dated in it.
   const lastDate = settled.some((t) => (dateOf(t) ?? '') > dateTo) ? windowEnd : dateTo
-  const byMonth = new Map(
-    monthsBetween(dateFrom, lastDate).map((month) => [month, { month, inCents: 0, outCents: 0 }]),
-  )
 
-  let skipped = 0
+  return {
+    transactions: counted,
+    currency,
+    months: monthsBetween(dateFrom, lastDate),
+    skipped: settled.filter((t) => t.transaction_amount.currency !== currency).length,
+    notYetSettled,
+    notCounted: inWindow.length - settled.length - notYetSettled,
+  }
+}
+
+export function summarizeByMonth(response: TransactionsResponse, accountCurrency?: string | null): Summary {
+  const { dateFrom } = response
+  const counted = countedTransactions(response, accountCurrency)
+  const byMonth = new Map(counted.months.map((month) => [month, { month, inCents: 0, outCents: 0 }]))
+
   let totalInCents = 0
   let totalOutCents = 0
-  for (const transaction of settled) {
-    if (transaction.transaction_amount.currency !== currency) {
-      skipped++
-      continue
-    }
+  for (const transaction of counted.transactions) {
     const entry = byMonth.get((dateOf(transaction) ?? '').slice(0, 7))
+    if (!entry) continue
     const cents = toCents(transaction.transaction_amount.amount)
-    if (!entry || Number.isNaN(cents)) continue
 
     const direction = directionOf(transaction)
     if (direction === 'in') {
@@ -158,9 +182,9 @@ export function summarizeByMonth(
     totalIn: totalInCents / 100,
     totalOut: totalOutCents / 100,
     net: (totalInCents - totalOutCents) / 100,
-    currency,
-    skipped,
-    notYetSettled,
-    notCounted: inWindow.length - settled.length - notYetSettled,
+    currency: counted.currency,
+    skipped: counted.skipped,
+    notYetSettled: counted.notYetSettled,
+    notCounted: counted.notCounted,
   }
 }

@@ -1,6 +1,6 @@
 # FetchFree
 
-Connect a bank account through [Enable Banking](https://enablebanking.com) and see your balances, your last 6 months of transactions, and a monthly **money in vs money out** summary. Read-only: the app can never move money.
+Connect a bank account through [Enable Banking](https://enablebanking.com) and see your balances, your last 6 months of transactions, a monthly **money in vs money out** summary, and a breakdown of **where your money went** by category. Read-only: the app can never move money.
 
 For how it all works (the login flow, the data model, the security choices), see **[docs/system-design.md](docs/system-design.md)**.
 

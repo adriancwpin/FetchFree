@@ -1,10 +1,12 @@
+import { useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useTransactions } from '@/hooks/useBank'
 import type { Transaction } from '@/lib/api'
+import { CATEGORIES, type CategorySelection, categorize, transactionsFor } from '@/lib/categories'
 import { formatUnsignedAmount } from '@/lib/format'
-import { dateOf, directionOf } from '@/lib/summary'
+import { countedTransactions, dateOf, directionOf } from '@/lib/summary'
 import { cn } from '@/lib/utils'
 
 const DIRECTION_CLASSES = {
@@ -34,8 +36,25 @@ function describe(transaction: Transaction): string {
   return counterparty ?? transaction.remittance_information?.join(' ') ?? '—'
 }
 
-export function TransactionsTable({ accountUid }: { accountUid: string }) {
+// With a category selected, the table lists exactly the transactions the breakdown totalled for it
+// (same direction, month, settlement and currency rules), so the rows add up to the amount clicked.
+export function TransactionsTable({
+  accountUid,
+  accountCurrency = null,
+  selection = null,
+}: {
+  accountUid: string
+  accountCurrency?: string | null
+  selection?: CategorySelection | null
+}) {
   const transactions = useTransactions(accountUid)
+  const rows = useMemo(() => {
+    if (!transactions.data) return []
+    const visible = selection?.category
+      ? transactionsFor(countedTransactions(transactions.data, accountCurrency), selection)
+      : transactions.data.transactions
+    return newestFirst(visible)
+  }, [transactions.data, accountCurrency, selection])
 
   if (transactions.isPending) {
     return <Skeleton className="h-32 w-full" />
@@ -45,6 +64,10 @@ export function TransactionsTable({ accountUid }: { accountUid: string }) {
   }
   if (transactions.data.transactions.length === 0) {
     return <p className="text-sm text-muted-foreground">No transactions.</p>
+  }
+
+  if (rows.length === 0) {
+    return <p className="text-sm text-muted-foreground">No transactions in this category.</p>
   }
 
   return (
@@ -57,10 +80,11 @@ export function TransactionsTable({ accountUid }: { accountUid: string }) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {newestFirst(transactions.data.transactions).map((transaction, index) => {
+        {rows.map((transaction, index) => {
           const direction = directionOf(transaction)
           const { amount, currency } = transaction.transaction_amount
           const statusLabel = transaction.status ? STATUS_LABELS[transaction.status] : undefined
+          const { label: categoryLabel, icon: CategoryIcon } = CATEGORIES[categorize(transaction)]
           return (
             // entry_reference isn't guaranteed unique across pages, so the index keeps keys distinct.
             <TableRow key={`${transaction.entry_reference ?? ''}-${index}`}>
@@ -71,6 +95,10 @@ export function TransactionsTable({ accountUid }: { accountUid: string }) {
                 <div className="flex items-center gap-2">
                   <span className="truncate">{describe(transaction)}</span>
                   {statusLabel && <Badge variant="outline">{statusLabel}</Badge>}
+                </div>
+                <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                  <CategoryIcon className="size-3" aria-hidden="true" />
+                  {categoryLabel}
                 </div>
               </TableCell>
               <TableCell className={cn('text-right tabular-nums', DIRECTION_CLASSES[direction ?? 'none'])}>

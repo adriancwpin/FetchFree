@@ -4,10 +4,12 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { CategoryBreakdown, CategoryFilterChip } from '@/components/CategoryBreakdown'
 import { SpendingSummary } from '@/components/SpendingSummary'
 import { TransactionsTable } from '@/components/TransactionsTable'
 import { useAccounts, useBalances } from '@/hooks/useBank'
 import type { Account, Balance } from '@/lib/api'
+import type { CategorySelection } from '@/lib/categories'
 import { formatAmount } from '@/lib/format'
 
 export function AccountsView() {
@@ -53,6 +55,9 @@ function primaryBalance(balances: Balance[] | undefined): Balance | undefined {
 
 function AccountCard({ account }: { account: Account }) {
   const [expanded, setExpanded] = useState(false)
+  // The breakdown's Spending/Income choice, month and selected category, in one place: the breakdown
+  // shows it and the table filters by it, so they stay in step (also across collapsing the card).
+  const [selection, setSelection] = useState<CategorySelection>({ direction: 'out' })
   const balances = useBalances(account.uid)
   const primary = primaryBalance(balances.data)
 
@@ -90,7 +95,21 @@ function AccountCard({ account }: { account: Account }) {
         {expanded && (
           <>
             <SpendingSummary accountUid={account.uid} accountCurrency={account.currency ?? null} />
-            <TransactionsTable accountUid={account.uid} />
+            <CategoryBreakdown
+              accountUid={account.uid}
+              accountCurrency={account.currency ?? null}
+              selection={selection}
+              onSelectionChange={setSelection}
+            />
+            <CategoryFilterChip
+              selection={selection}
+              onClear={() => setSelection({ ...selection, category: undefined })}
+            />
+            <TransactionsTable
+              accountUid={account.uid}
+              accountCurrency={account.currency ?? null}
+              selection={selection}
+            />
           </>
         )}
       </CardContent>
