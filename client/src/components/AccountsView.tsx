@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Budgets } from '@/components/Budgets'
 import { CategoryBreakdown, CategoryFilterChip } from '@/components/CategoryBreakdown'
 import { SpendingSummary } from '@/components/SpendingSummary'
 import { TransactionsTable } from '@/components/TransactionsTable'
@@ -99,6 +100,12 @@ function AccountCard({ account }: { account: Account }) {
         {expanded && (
           <>
             <SpendingSummary accountUid={account.uid} accountCurrency={account.currency ?? null} />
+            <Budgets
+              accountUid={account.uid}
+              accountCurrency={account.currency ?? null}
+              selection={selection}
+              onSelectionChange={setSelection}
+            />
             <CategoryBreakdown
               accountUid={account.uid}
               accountCurrency={account.currency ?? null}

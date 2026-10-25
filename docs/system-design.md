@@ -218,11 +218,32 @@ GET /transactions
 
 Code: [server/src/transactionSync.ts](../server/src/transactionSync.ts) (when and how far back to fetch), [server/src/transactionStore.ts](../server/src/transactionStore.ts) (the SQL).
 
+### 4.7 Budgets
+
+A budget is a **monthly spending limit for one category**, e.g. Groceries €300, the same every month.
+
+- **Where they live:** the `budgets` table, through `GET/PUT/DELETE /api/accounts/:uid/budgets[/:category]`. Amounts are stored in **whole cents**, like all money maths in the app. Budgets are filed under the stable account key (§4.6), so they survive reconnecting the bank.
+- **The server doesn't know the category list.** It only checks that the id looks like one (`/^[a-z][a-zA-Z]{0,39}$/`) and that the amount is between 0 and 1,000,000,000 with at most 2 decimals. The client ignores budgets for ids it doesn't recognise.
+- **The maths runs in the browser**, in `budgetProgress()` ([client/src/lib/budgets.ts](../client/src/lib/budgets.ts)), a pure function like the summary:
+  - **spent** reuses `breakdownByCategory(counted, 'out', month)`, so a budget always shows the same amount as its row in the category breakdown (a test checks this)
+  - **pace** is how much of the month has gone by: today's day ÷ days in the month for the current month, and 1 for a past month
+  - **status:** `over` if spent > limit; `ahead` ("Spending fast") if spent ÷ limit is more than 10 points ahead of pace; otherwise `onTrack`. The UI says it in words as well as colour.
+
+  ```
+  Groceries    €120.40 of €300
+  [██████████░░░░░│░░░░░░░░░░]   ← bar = spent ÷ limit, │ = pace (how far through the month)
+  On track                    €179.60 left
+  ```
+- **Which month:** the one picked in the breakdown's Period select, or the current month for "All months". Clicking a budget filters the transactions table to that category and month, through the same shared `selection` as the breakdown.
+- **Editing** uses mutations that write the result straight into the cached budget list (`setQueryData`), so the list updates without a refetch.
+
+Code: [server/src/budgetStore.ts](../server/src/budgetStore.ts), [client/src/components/Budgets.tsx](../client/src/components/Budgets.tsx).
+
 ---
 
 ## 5. Data model (SQLite)
 
-All SQL lives in **three files**: [db.ts](../server/src/db.ts), [sessionStore.ts](../server/src/sessionStore.ts) and [transactionStore.ts](../server/src/transactionStore.ts). Switching to Postgres later means rewriting just those.
+All SQL lives in [db.ts](../server/src/db.ts) and the three stores: [sessionStore.ts](../server/src/sessionStore.ts), [transactionStore.ts](../server/src/transactionStore.ts) and [budgetStore.ts](../server/src/budgetStore.ts). Switching to Postgres later means rewriting just those.
 
 ```
 pending_auths                       bank_sessions
@@ -240,11 +261,16 @@ account_key     TEXT                account_key    TEXT  PK
 date            TEXT  (YYYY-MM-DD)  covered_from   TEXT  (saved data starts)
 status          TEXT  (BOOK, PDNG…) gap_from       TEXT  (nothing saved from…
 entry_reference TEXT                gap_to         TEXT   …until, exclusive)
-fingerprint     TEXT  (hash of data) last_synced_at TEXT (ISO time)
+fingerprint     TEXT  (data's hash) last_synced_at TEXT  (ISO time)
 saved_at        TEXT  (ISO time)    truncated      INTEGER (0/1)
-data            TEXT  (bank's JSON)
-                                    last_error     TEXT  (latest attempt failed)
+data            TEXT  (bank's JSON) last_error     TEXT  (latest attempt failed)
                                     last_failed_at TEXT
+
+budgets
+─────────────────────────
+account_key  TEXT  PK (with category)
+category     TEXT  (e.g. groceries)
+amount_cents INTEGER
 ```
 
 - **`pending_auths`** holds logins that have started but not finished. A row is deleted when its callback arrives, or after 15 minutes.
@@ -254,6 +280,7 @@ data            TEXT  (bank's JSON)
 
 - **`transactions`** keeps each transaction exactly as the bank sent it (`data`), plus the few columns needed to find and replace it. `account_key` is the stable account id from §4.6, not the per-login `uid`.
 - **`account_syncs`** has one row per account: when it was last synced, where the saved copy starts, any gap, and whether the latest attempt failed.
+- **`budgets`** has one row per account and category: the monthly limit in cents (§4.7).
 
 Balances are **not stored**. They're fetched live and cached for 5 minutes in the browser.
 
@@ -270,6 +297,9 @@ Balances are **not stored**. They're fetched live and cached for 5 minutes in th
 | `GET /api/accounts` | The connected accounts |
 | `GET /api/accounts/:uid/balances` | Balances for one account |
 | `GET /api/accounts/:uid/transactions` | `{ transactions, dateFrom, dateTo, truncated, lastSyncedAt, syncError, gap }` from the saved copy; `?refresh=true` checks with the bank first |
+| `GET /api/accounts/:uid/budgets` | `[{ category, amount }]` |
+| `PUT /api/accounts/:uid/budgets/:category` | Body `{ amount }`: sets that category's monthly limit (400 if invalid) |
+| `DELETE /api/accounts/:uid/budgets/:category` | Removes it (204) |
 | `GET /login?bank=…&country=…` | *Browser navigation*, not fetch: starts a bank login |
 | `GET /callback?code=…&state=…` | *The bank redirects here* after you approve |
 
@@ -287,6 +317,7 @@ Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable
 | Reading accounts that aren't yours | `requireSessionAccount` only allows account IDs from the current session. |
 | `/login` pointed at an arbitrary bank | Only banks from Enable Banking's own list are accepted. |
 | Bank data committed to GitHub | `data/` is gitignored. |
+| Another website changing your budgets | Browsers only send a cross-site `PUT`/`DELETE` or JSON body after a CORS preflight, which only the client's origin passes. HTML forms can't send them, and non-JSON bodies aren't parsed, so they fail validation. |
 
 **Not done yet:** user accounts and login. Before the app goes online, each user needs their own login and session (see §10).
 
@@ -341,8 +372,8 @@ Run `npm test` in `server/` and in `client/`. GitHub Actions runs both on every 
 | `server/src/enableBankingClient.test.ts` | Timeouts, error pages, paging, the 89-day fallback rules, PSU headers, consent clamp | `fetch` replaced by a fake Enable Banking (`test/fakeBank.ts`) |
 | `server/src/bankDirectory.test.ts` | Caching, failures not cached, bank lookup | Fake Enable Banking |
 | `server/src/transactionStore.test.ts` | Replacing a range keeps older rows, pending → booked, unconfirmable pending dropped, moved dates, undated rows, truncated fetches never delete, pruning, gaps opening, filling and unchecked repairs, failures recorded | In-memory SQLite |
-| `server/src/routes.test.ts` | The whole HTTP flow: `/login` guard, `/callback` state and cookie checks, account guard, error handling; saved transactions (no bank call while fresh, 7-day refresh, bank down and its 5-minute wait, 401/403 passed through, re-fetch after truncation and its unchecked part, reaching back to pending, one shared fetch for overlapping requests, gap after a long break and clipped to the window, history kept across reconnects) | supertest calls `app` directly, without a real server |
-| `client/src/lib/*.test.ts` | Summary maths, categories (real Nordea examples, totals match the chart), formatting, API error and retry rules | `fetch` replaced in the API tests |
+| `server/src/routes.test.ts` | The whole HTTP flow: `/login` guard, `/callback` state and cookie checks, account guard, error handling; saved transactions (no bank call while fresh, 7-day refresh, bank down and its 5-minute wait, 401/403 passed through, re-fetch after truncation and its unchecked part, reaching back to pending, one shared fetch for overlapping requests, gap after a long break and clipped to the window, history kept across reconnects); budgets (save, replace, remove, validation, kept across reconnects) | supertest calls `app` directly, without a real server |
+| `client/src/lib/*.test.ts` | Summary maths, categories (real Nordea examples, totals match the chart), budgets (spent matches the breakdown, pace, status, sorting), formatting, API error and retry rules | `fetch` replaced in the API tests |
 
 `server/test/setup.ts` runs before every server test file. It generates a throwaway private key and sets the environment variables, so tests never read your real `.env`, key or database.
 
@@ -410,4 +441,8 @@ Each sync starts no later than the oldest saved pending transaction, so Monday i
 
 <details><summary>10. Why are saved transactions filed under <code>identification_hash</code> and not the account <code>uid</code>?</summary>
 The <code>uid</code> is new with every bank login. The hash comes from the account's IBAN and currency, so it stays the same after reconnecting, and the saved history is found again.
+</details>
+
+<details><summary>11. It's 10 October. You've spent €60 of a €100 Groceries budget. Is it "On track", "Spending fast" or "Over budget"?</summary>
+"Spending fast". 10 of 31 days have gone by, so the pace is about 32%, and 60% is more than 10 points ahead of it. It isn't over budget, because €60 is less than €100. By 25 October (pace about 81%) the same €60 would be "On track".
 </details>
