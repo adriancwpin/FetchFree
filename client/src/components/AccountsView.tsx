@@ -136,10 +136,11 @@ function AccountCard({ account, readOnly }: { account: Account; readOnly: boolea
 }
 
 // Budgets, the breakdown and the table fall back to the automatic categories if the user's own
-// can't be loaded; this says so, once for all three, since budgets may then look off.
+// can't be loaded; this says so, once for all three, since budgets may then look off. Only when
+// none were loaded: if a later refetch fails, the last ones loaded are still applied.
 function CategoryRulesError({ accountUid }: { accountUid: string }) {
   const rules = useCategoryRules(accountUid)
-  if (!rules.isError) return null
+  if (!rules.isError || rules.data !== undefined) return null
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm text-destructive" role="status">
       <span>Your own categories couldn't be loaded, so automatic ones are shown: {rules.error.message}</span>

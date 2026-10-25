@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Pencil, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useBudgets, useCategoryRules, useDeleteBudget, useSetBudget, useTransactions } from '@/hooks/useBank'
 import { budgetProgress, monthOf, monthPace, type BudgetRow, type BudgetStatus } from '@/lib/budgets'
 import { CATEGORIES, type CategoryId, type CategorySelection } from '@/lib/categories'
@@ -64,7 +65,8 @@ export function Budgets({
 
   // Loading, errors and "no transactions" are shown by the table below. Waits for the user's own
   // categories, which decide what each budget has spent.
-  if (!counted?.currency || counted.transactions.length === 0 || rules.isPending) return null
+  if (!counted?.currency || counted.transactions.length === 0) return null
+  if (rules.isPending) return <Skeleton className="h-16 w-full" />
   const { currency } = counted
   const pace = monthPace(month, today)
   const unbudgeted = SPENDING_CATEGORIES.filter((category) => !rows.some((row) => row.category === category))

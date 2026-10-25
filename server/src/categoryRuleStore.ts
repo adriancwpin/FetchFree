@@ -23,6 +23,21 @@ export const categoryRuleStore = {
       .all(accountKey) as unknown as CategoryRule[]
   },
 
+  has(accountKey: string, direction: Direction, payee: string): boolean {
+    return (
+      db
+        .prepare('SELECT 1 FROM category_rules WHERE account_key = ? AND direction = ? AND payee = ?')
+        .get(accountKey, direction, payee) !== undefined
+    )
+  },
+
+  count(accountKey: string): number {
+    const row = db.prepare('SELECT COUNT(*) AS count FROM category_rules WHERE account_key = ?').get(accountKey) as {
+      count: number
+    }
+    return row.count
+  },
+
   set(accountKey: string, rule: CategoryRule): CategoryRule {
     db.prepare(
       `INSERT INTO category_rules (account_key, direction, payee, category) VALUES (?, ?, ?, ?)

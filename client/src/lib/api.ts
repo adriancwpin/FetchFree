@@ -98,7 +98,7 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
 // A 204 No Content answer: request() reads its empty body as null.
 const noContentSchema = z.null()
 
-const bankRefSchema =z.object({ name: z.string(), country: z.string() })
+const bankRefSchema = z.object({ name: z.string(), country: z.string() })
 
 // The server's EndReason (server/src/sessionStore.ts), plus "ended" for any reason this client
 // doesn't know yet.
@@ -230,12 +230,10 @@ export function setCategoryRule(accountUid: string, rule: CategoryRule) {
   })
 }
 
+// Which rule goes in the query string: proxies and HTTP clients don't reliably pass on a DELETE body.
 export async function deleteCategoryRule(accountUid: string, rule: Pick<CategoryRule, 'direction' | 'payee'>) {
-  await request(categoryRulesPath(accountUid), noContentSchema, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ direction: rule.direction, payee: rule.payee }),
-  })
+  const query = new URLSearchParams({ direction: rule.direction, payee: rule.payee })
+  await request(`${categoryRulesPath(accountUid)}?${query}`, noContentSchema, { method: 'DELETE' })
 }
 
 // `refresh` asks the server to check with the bank even if its saved copy is recent.

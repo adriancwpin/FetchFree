@@ -3,8 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeBank, json, type FakeCall } from '../test/fakeBank.js'
 import { app } from './app.js'
 import { db } from './db.js'
+import { categoryRuleStore } from './categoryRuleStore.js'
+import { MAX_CATEGORY_RULES } from './routes/accounts.js'
 import { sessionStore } from './sessionStore.js'
 import { transactionStore } from './transactionStore.js'
+import { accountKey } from './transactionSync.js'
 
 const CLIENT = 'http://localhost:5173/'
 const BANK_LOGIN_URL = 'https://bank.example/login'
@@ -691,6 +694,11 @@ describe('category rules', () => {
   const rulesPath = (uid: string) => `/api/accounts/${uid}/category-rules`
   const put = (uid: string, body: unknown) => request(app).put(rulesPath(uid)).send(body as object)
   const list = async (uid: string) => (await request(app).get(rulesPath(uid))).body as unknown[]
+  const remove = (uid: string, query: Record<string, unknown>) =>
+    request(app).delete(rulesPath(uid)).query(query as Record<string, string>)
+  // The stable key rules are filed under (see transactionSync.ts accountKey).
+  const accountKeyOf = (uid: string) =>
+    accountKey(sessionStore.getLatestSession()!.accounts.find((account) => account.uid === uid)!)
 
   beforeEach(() => connect('acc-1'))
 
@@ -705,7 +713,7 @@ describe('category rules', () => {
       { direction: 'out', payee: 'alepa kamppi', category: 'groceries' },
     ])
 
-    const removed = await request(app).delete(rulesPath('acc-1')).send({ direction: 'out', payee: 'alepa kamppi' })
+    const removed = await remove('acc-1', { direction: 'out', payee: 'alepa kamppi' })
     expect(removed.status).toBe(204)
     expect(await list('acc-1')).toEqual([{ direction: 'in', payee: 'alepa kamppi', category: 'fromPeople' }])
   })
@@ -737,12 +745,38 @@ describe('category rules', () => {
     await put('acc-1', { direction: 'out', payee: 'alepa', category: 'groceries' })
     expect(await list('acc-1')).toEqual([{ direction: 'out', payee: 'alepa', category: 'groceries' }])
 
-    await request(app).delete(rulesPath('acc-1')).send({ direction: 'out', payee: ' alepa' })
+    await remove('acc-1', { direction: 'out', payee: ' alepa' })
     expect(await list('acc-1')).toEqual([])
   })
 
-  it('rejects removing a rule without saying which', async () => {
-    expect((await request(app).delete(rulesPath('acc-1')).send({ direction: 'out' })).status).toBe(400)
+  it('removes a rule named in the query string, whatever characters its payee has', async () => {
+    const payee = 'alepa & co / 50% + more?'
+    await put('acc-1', { direction: 'out', payee, category: 'eatingOut' })
+
+    expect((await remove('acc-1', { direction: 'out', payee })).status).toBe(204)
+    expect(await list('acc-1')).toEqual([])
+  })
+
+  it.each([
+    ['without a payee', { direction: 'out' }],
+    ['with nothing in the query', {}],
+    ['with the payee given twice', { direction: 'out', payee: ['a', 'b'] }],
+  ])('rejects removing a rule %s', async (_case, query) => {
+    await put('acc-1', { direction: 'out', payee: 'a', category: 'eatingOut' })
+    expect((await remove('acc-1', query)).status).toBe(400)
+    expect(await list('acc-1')).toHaveLength(1)
+  })
+
+  it('limits how many rules an account can have, but still lets existing ones change', async () => {
+    for (let i = 0; i < MAX_CATEGORY_RULES; i++) {
+      categoryRuleStore.set(accountKeyOf('acc-1'), { direction: 'out', payee: `payee ${i}`, category: 'groceries' })
+    }
+
+    const tooMany = await put('acc-1', { direction: 'out', payee: 'one more', category: 'groceries' })
+    expect(tooMany.status).toBe(409)
+    expect(tooMany.body.error).toBeTruthy()
+    expect((await put('acc-1', { direction: 'out', payee: 'payee 0', category: 'eatingOut' })).status).toBe(200)
+    expect(await list('acc-1')).toHaveLength(MAX_CATEGORY_RULES)
   })
 
   it("refuses an account that isn't in the current session", async () => {
