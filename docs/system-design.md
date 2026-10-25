@@ -175,7 +175,7 @@ counterparty name  +  payment message  +  bank's transaction type
 - **The totals always match the chart.** `countedTransactions()` in [summary.ts](../client/src/lib/summary.ts) decides which transactions count (in the window, settled, in the summary currency), and both the monthly chart and `breakdownByCategory()` use it. A test checks that the category totals equal "Money in" and "Money out".
 - **The filtered table matches the breakdown.** Clicking a category lists `transactionsFor(counted, selection)`, the same function the breakdown totals. So the rows always add up to the amount you clicked, without pending or other-currency entries.
 - **Each transaction's category is computed once** and cached per transaction object (a `WeakMap`), because the table, breakdown and filter all ask for it on every render.
-- **It runs in the browser**, like the summary. Transactions are now saved on the server (§4.6), but categories aren't yet; storing them comes with editing them.
+- **It runs in the browser**, like the summary. Only your own changes (§4.9) are stored on the server; the automatic categories are worked out again each time, so improving a rule fixes old transactions too.
 - **Adding a rule:** add a `{ category, match: /…/ }` line in the right place in `OUT_RULES` or `IN_RULES`, plus a test case in `categories.test.ts`. On the Nordea sandbox data, 97% of transactions get a real category.
 
 The UI ([CategoryBreakdown.tsx](../client/src/components/CategoryBreakdown.tsx)) ranks categories by amount, with a Spending/Income switch and a month picker. Clicking a category filters the transactions table. The bars use one colour per direction: it's one series ranked by size, so a rainbow of colours would add nothing.
@@ -265,11 +265,32 @@ Account-data request fails with 4xx (not 429)        (every bank call goes throu
 
 Code: [server/src/sessionEnded.ts](../server/src/sessionEnded.ts), [client/src/components/ReconnectBanner.tsx](../client/src/components/ReconnectBanner.tsx).
 
+### 4.9 Your own categories
+
+Click a transaction's category in the table, pick another, and **everything from that payee** moves, past and future: `out: "k market" → Eating out`.
+
+```
+transaction ── payeeOf() ──► { direction: "out", key: "k market", label: "K market" }
+                                     │
+              your rule for "out:k market"?  ── yes ──► that category   ("· yours" in the table)
+                                     └────────── no ───► the automatic category (§4.5)
+```
+
+- **Why per payee, not per transaction?** Saved transactions are rewritten on every sync (§4.6), a pending transaction changes when it's booked, and some banks send no `entry_reference`. An edit to one transaction would have nothing stable to hang on to and could silently disappear. A payee's name stays the same, and fixing it once also fixes next month's.
+- **The payee** is the text the table shows: the other party's name (a blank name doesn't count), or failing that the payment message. Its **key** ignores case, accents and spacing (`normalise()`), so "ALEPA  Kamppi" and "Alepa Kamppi" are one payee.
+- **A message is matched on its words alone.** Messages often carry a reference, date or invoice number that changes every time, so numbers and punctuation are dropped: "LAPSILISA 10/2026 REF 12345" and next month's "LAPSILISA 11/2026 REF 12399" are both `lapsilisa ref`. Names keep their numbers. A transaction with no name and a numbers-only message has nothing to match on, so it can't be changed. Keys are cut to the 200 characters the server accepts.
+- **Waiting and failing.** The breakdown, budgets and the table wait for your rules before showing anything, so categories don't jump once they arrive. If they can't be loaded, the automatic categories are shown and the account card says so, with **Try again**, because budgets may look off.
+- **A rule can't cross directions.** Rules are kept separately for money in and money out, and a rule pointing at the other direction's category (or one this client doesn't know) is ignored. So you can't turn spending into income, and the totals still match the chart: a rule changes **which** category a transaction is in, never **whether** it counts.
+- **Everything follows.** `categorize(transaction, rules)` is the one function the table, the breakdown, its filter and budgets all use, so they move together. Only the automatic answer is cached per transaction; the rule is looked up each time (one `Map.get`), so nothing goes stale when you change one.
+- **Where they live:** the `category_rules` table, filed under the stable account key like budgets, so they survive reconnecting, and still editable once the connection has ended. As with budgets, the server doesn't know the categories or how payees are normalised; it stores what the client sends. The payee goes in the JSON body, not the URL, because it's free text.
+
+Code: [server/src/categoryRuleStore.ts](../server/src/categoryRuleStore.ts), [client/src/lib/categories.ts](../client/src/lib/categories.ts) (`payeeOf`, `ruleMap`, `categorize`), [client/src/components/TransactionsTable.tsx](../client/src/components/TransactionsTable.tsx).
+
 ---
 
 ## 5. Data model (SQLite)
 
-All SQL lives in [db.ts](../server/src/db.ts) and the three stores: [sessionStore.ts](../server/src/sessionStore.ts), [transactionStore.ts](../server/src/transactionStore.ts) and [budgetStore.ts](../server/src/budgetStore.ts). Switching to Postgres later means rewriting just those.
+All SQL lives in [db.ts](../server/src/db.ts) and the four stores: [sessionStore.ts](../server/src/sessionStore.ts), [transactionStore.ts](../server/src/transactionStore.ts), [budgetStore.ts](../server/src/budgetStore.ts) and [categoryRuleStore.ts](../server/src/categoryRuleStore.ts). Switching to Postgres later means rewriting just those.
 
 ```
 pending_auths                       bank_sessions
@@ -293,11 +314,12 @@ saved_at        TEXT  (ISO time)    truncated      INTEGER (0/1)
 data            TEXT  (bank's JSON) last_error     TEXT  (latest attempt failed)
                                     last_failed_at TEXT
 
-budgets
-─────────────────────────
-account_key  TEXT  PK (with category)
-category     TEXT  (e.g. groceries)
-amount_cents INTEGER
+budgets                             category_rules
+─────────────────────────           ─────────────────────────────
+account_key  TEXT  PK (+ category)  account_key TEXT  PK (+ direction, payee)
+category     TEXT  (e.g. groceries) direction   TEXT  (in / out)
+amount_cents INTEGER                payee       TEXT  (e.g. "k market")
+                                    category    TEXT  (e.g. eatingOut)
 ```
 
 - **`pending_auths`** holds logins that have started but not finished. A row is deleted when its callback arrives, or after 15 minutes.
@@ -308,6 +330,7 @@ amount_cents INTEGER
 - **`transactions`** keeps each transaction exactly as the bank sent it (`data`), plus the few columns needed to find and replace it. `account_key` is the stable account id from §4.6, not the per-login `uid`.
 - **`account_syncs`** has one row per account: when it was last synced, where the saved copy starts, any gap, and whether the latest attempt failed.
 - **`budgets`** has one row per account and category: the monthly limit in cents (§4.7).
+- **`category_rules`** has one row per account, direction and payee: your own category for that payee (§4.9).
 
 Balances are **not stored**. They're fetched live and cached for 5 minutes in the browser.
 
@@ -327,6 +350,9 @@ Balances are **not stored**. They're fetched live and cached for 5 minutes in th
 | `GET /api/accounts/:uid/budgets` | `[{ category, amount }]` |
 | `PUT /api/accounts/:uid/budgets/:category` | Body `{ amount }`: sets that category's monthly limit (400 if invalid) |
 | `DELETE /api/accounts/:uid/budgets/:category` | Removes it (204) |
+| `GET /api/accounts/:uid/category-rules` | `[{ direction, payee, category }]` |
+| `PUT /api/accounts/:uid/category-rules` | Body `{ direction, payee, category }`: everything from that payee goes in that category (400 if invalid) |
+| `DELETE /api/accounts/:uid/category-rules` | Body `{ direction, payee }`: back to automatic (204) |
 | `GET /login?bank=…&country=…` | *Browser navigation*, not fetch: starts a bank login |
 | `GET /callback?code=…&state=…` | *The bank redirects here* after you approve |
 
@@ -344,7 +370,7 @@ Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable
 | Reading accounts that aren't yours | `requireSessionAccount` only allows account IDs from the current session. |
 | `/login` pointed at an arbitrary bank | Only banks from Enable Banking's own list are accepted. |
 | Bank data committed to GitHub | `data/` is gitignored. |
-| Another website changing your budgets | Browsers only send a cross-site `PUT`/`DELETE` or JSON body after a CORS preflight, which only the client's origin passes. HTML forms can't send them, and non-JSON bodies aren't parsed, so they fail validation. |
+| Another website changing your budgets or categories | Browsers only send a cross-site `PUT`/`DELETE` or JSON body after a CORS preflight, which only the client's origin passes. HTML forms can't send them, and non-JSON bodies aren't parsed, so they fail validation. |
 
 **Not done yet:** user accounts and login. Before the app goes online, each user needs their own login and session (see §10).
 
@@ -383,7 +409,7 @@ Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable
 1. **No users or login.** It's one shared connection, and safe only because the server is loopback-only.
 2. **No UI tests.** The logic is covered by automated tests (§11), but the React components aren't.
 3. **Saved transactions are kept for 6 months and only deleted by age.** Disconnect keeps them (on purpose, see §4.6). An account you never reconnect keeps its last 6 months until you delete `server/data/`, and there's no "delete my data" button yet.
-4. **Categories are automatic only.** You can't change a transaction's category or add your own rules from the app yet. Now that transactions are saved, that's the natural next step. There's no search or weekly view either.
+4. **Categories are per payee only.** You can move everything from one payee (§4.9), but not write rules on words in the message, add your own categories, or share rules between accounts. There's no search or weekly view either.
 5. **No warning before a connection expires.** Once it has ended, the app says so and offers reconnecting (§4.8), but it doesn't warn you a day or two in advance.
 
 ---
@@ -395,12 +421,12 @@ Run `npm test` in `server/` and in `client/`. GitHub Actions runs both on every 
 | Where | What it covers | How it fakes the outside world |
 |---|---|---|
 | `server/src/sessionStore.test.ts` | Single-use, expiring logins; replacing and revoking sessions; ended sessions (reason, expiry, not revoked again, replaced on reconnect) | In-memory SQLite (`DB_PATH=:memory:`) |
-| `server/src/db.migration.test.ts` | An old-format database gains the new columns and keeps its session | A temporary database file with the old schema |
+| `server/src/db.migration.test.ts` | An old-format database gains the new columns and tables and keeps its session | A temporary database file with the old schema |
 | `server/src/enableBankingClient.test.ts` | Timeouts, error pages, paging, the 89-day fallback rules, PSU headers, consent clamp | `fetch` replaced by a fake Enable Banking (`test/fakeBank.ts`) |
 | `server/src/bankDirectory.test.ts` | Caching, failures not cached, bank lookup | Fake Enable Banking |
 | `server/src/transactionStore.test.ts` | Replacing a range keeps older rows, pending → booked, unconfirmable pending dropped, moved dates, undated rows, truncated fetches never delete, pruning, gaps opening, filling and unchecked repairs, failures recorded | In-memory SQLite |
-| `server/src/routes.test.ts` | The whole HTTP flow: `/login` guard, `/callback` state and cookie checks, account guard, error handling; saved transactions (no bank call while fresh, 7-day refresh, bank down and its 5-minute wait, 401/403 passed through, re-fetch after truncation and its unchecked part, reaching back to pending, one shared fetch for overlapping requests, gap after a long break and clipped to the window, history kept across reconnects); budgets (save, replace, remove, validation, kept across reconnects); ended connections (confirmed with Enable Banking before saying so, read-only saved data with no bank calls, reconnecting) | supertest calls `app` directly, without a real server |
-| `client/src/lib/*.test.ts` | Summary maths, categories (real Nordea examples, totals match the chart), budgets (spent matches the breakdown, pace, status, sorting), formatting, API error and retry rules | `fetch` replaced in the API tests |
+| `server/src/routes.test.ts` | The whole HTTP flow: `/login` guard, `/callback` state and cookie checks, account guard, error handling; saved transactions (no bank call while fresh, 7-day refresh, bank down and its 5-minute wait, 401/403 passed through, re-fetch after truncation and its unchecked part, reaching back to pending, one shared fetch for overlapping requests, gap after a long break and clipped to the window, history kept across reconnects); budgets and category rules (save, replace, remove, validation, kept across reconnects); ended connections (confirmed with Enable Banking before saying so, read-only saved data with no bank calls, reconnecting) | supertest calls `app` directly, without a real server |
+| `client/src/lib/*.test.ts` | Summary maths, categories (real Nordea examples, totals match the chart), your own category rules (payee matching, direction guard, totals still match), budgets (spent matches the breakdown, pace, status, sorting), formatting, API error and retry rules | `fetch` replaced in the API tests |
 
 `server/test/setup.ts` runs before every server test file. It generates a throwaway private key and sets the environment variables, so tests never read your real `.env`, key or database.
 
@@ -476,4 +502,8 @@ The <code>uid</code> is new with every bank login. The hash comes from the accou
 
 <details><summary>12. The bank answers a balances request with 401. Why doesn't the server immediately tell you to reconnect?</summary>
 A 401 can also mean Enable Banking rejected <b>our own JWT</b> (e.g. a wrong key), and reconnecting wouldn't fix that. So the server first asks Enable Banking for the session's state. Only if it's no longer <code>AUTHORIZED</code> does it record the session as ended and reply <code>SESSION_ENDED</code>; otherwise the original error comes through with its real message.
+</details>
+
+<details><summary>13. You change a pending card payment at "Alepa" to Eating out. Two days later it's booked and the sync replaces the row. Is it still Eating out? Why?</summary>
+Yes. The change wasn't stored on that transaction but as a rule for the payee (<code>out: "alepa"</code>). The booked copy has the same payee, so the rule matches it, and any future Alepa payment too. That's exactly why rules are per payee: the row itself doesn't survive the sync.
 </details>

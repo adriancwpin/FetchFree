@@ -1,5 +1,5 @@
 import type { Budget } from '@/lib/api'
-import { breakdownByCategory, CATEGORIES, type CategoryId } from '@/lib/categories'
+import { breakdownByCategory, CATEGORIES, type CategoryId, type CategoryRules } from '@/lib/categories'
 import type { CountedTransactions } from '@/lib/summary'
 
 // Spending faster than the month is passing, by more than this share of the limit, counts as "ahead".
@@ -46,9 +46,10 @@ export function budgetProgress(
   budgets: Budget[],
   month: string,
   today: Date,
+  rules?: CategoryRules,
 ): BudgetRow[] {
   const spentCents = new Map(
-    breakdownByCategory(counted, 'out', month).map((row) => [row.category, Math.round(row.amount * 100)]),
+    breakdownByCategory(counted, 'out', month, rules).map((row) => [row.category, Math.round(row.amount * 100)]),
   )
   const pace = monthPace(month, today)
 

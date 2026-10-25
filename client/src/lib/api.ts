@@ -95,7 +95,10 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
   return parsed.data
 }
 
-const bankRefSchema = z.object({ name: z.string(), country: z.string() })
+// A 204 No Content answer: request() reads its empty body as null.
+const noContentSchema = z.null()
+
+const bankRefSchema =z.object({ name: z.string(), country: z.string() })
 
 // The server's EndReason (server/src/sessionStore.ts), plus "ended" for any reason this client
 // doesn't know yet.
@@ -203,10 +206,36 @@ export function setBudget(accountUid: string, category: string, amount: number) 
 }
 
 export async function deleteBudget(accountUid: string, category: string) {
-  const response = await fetch(budgetsPath(accountUid, category), { method: 'DELETE' })
-  if (!response.ok) {
-    throw new ApiError(`Removing the budget failed with status ${response.status}`, response.status >= 500)
-  }
+  await request(budgetsPath(accountUid, category), noContentSchema, { method: 'DELETE' })
+}
+
+const categoryRuleSchema = z.object({ direction: z.enum(['in', 'out']), payee: z.string(), category: z.string() })
+
+// The user's own category for everything from one payee (`payee` is categories.ts's Payee key).
+export type CategoryRule = z.infer<typeof categoryRuleSchema>
+
+function categoryRulesPath(accountUid: string) {
+  return `/api/accounts/${encodeURIComponent(accountUid)}/category-rules`
+}
+
+export function getCategoryRules(accountUid: string) {
+  return request(categoryRulesPath(accountUid), z.array(categoryRuleSchema))
+}
+
+export function setCategoryRule(accountUid: string, rule: CategoryRule) {
+  return request(categoryRulesPath(accountUid), categoryRuleSchema, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(rule),
+  })
+}
+
+export async function deleteCategoryRule(accountUid: string, rule: Pick<CategoryRule, 'direction' | 'payee'>) {
+  await request(categoryRulesPath(accountUid), noContentSchema, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ direction: rule.direction, payee: rule.payee }),
+  })
 }
 
 // `refresh` asks the server to check with the bank even if its saved copy is recent.

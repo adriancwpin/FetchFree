@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Transaction, TransactionsResponse } from '@/lib/api'
 import { budgetProgress, monthOf, monthPace } from '@/lib/budgets'
-import { breakdownByCategory } from '@/lib/categories'
+import { breakdownByCategory, ruleMap } from '@/lib/categories'
 import { countedTransactions } from '@/lib/summary'
 
 function spend(counterparty: string, amount: string, date: string): Transaction {
@@ -68,6 +68,12 @@ describe('budgetProgress', () => {
     expect(groceries!.spent).toBe(59.97)
     expect(groceries!.spent).toBe(breakdownRow!.amount)
     expect(groceries!.remaining).toBe(40.03)
+  })
+
+  it('counts spending your own category rules moved into the budget', () => {
+    const rules = ruleMap([{ direction: 'out', payee: 'internet pizza oy', category: 'groceries' }])
+    const [groceries] = budgetProgress(sample, [{ category: 'groceries', amount: 100 }], '2026-10', OCT_10, rules)
+    expect(groceries!.spent).toBe(104.97)
   })
 
   it('reports how far over a budget is', () => {

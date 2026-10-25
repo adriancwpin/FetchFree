@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, bankLoginHref, getStatus, getTransactions, onSessionEnded } from '@/lib/api'
+import {
+  ApiError,
+  bankLoginHref,
+  deleteCategoryRule,
+  getStatus,
+  getTransactions,
+  onSessionEnded,
+  setCategoryRule,
+} from '@/lib/api'
 
 function respond(body: unknown, status = 200) {
   vi.stubGlobal('fetch', async () => new Response(JSON.stringify(body), { status }))
@@ -106,5 +114,31 @@ describe('bankLoginHref', () => {
     expect(bankLoginHref('http://localhost:3000/login', { name: 'S-Pankki & Co', country: 'FI' })).toBe(
       'http://localhost:3000/login?bank=S-Pankki+%26+Co&country=FI',
     )
+  })
+})
+
+describe('category rules', () => {
+  it('sends the payee in the JSON body, not the URL', async () => {
+    const rule = { direction: 'out' as const, payee: 'alepa / kamppi?', category: 'eatingOut' }
+    const fetchSpy = vi.fn(async (_path: string, init?: RequestInit) =>
+      init?.method === 'DELETE' ? new Response(null, { status: 204 }) : new Response(JSON.stringify(rule)),
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+
+    expect(await setCategoryRule('acc 1', rule)).toEqual(rule)
+    await deleteCategoryRule('acc 1', rule)
+
+    expect(fetchSpy.mock.calls.map(([path, init]) => [path, init?.method, init?.body])).toEqual([
+      ['/api/accounts/acc%201/category-rules', 'PUT', JSON.stringify(rule)],
+      ['/api/accounts/acc%201/category-rules', 'DELETE', JSON.stringify({ direction: 'out', payee: 'alepa / kamppi?' })],
+    ])
+  })
+
+  it("shows the server's message when removing a rule fails", async () => {
+    respond({ error: 'Unknown account' }, 404)
+    await expect(deleteCategoryRule('acc-1', { direction: 'out', payee: 'alepa' })).rejects.toMatchObject({
+      message: 'Unknown account',
+      retryable: false,
+    })
   })
 })

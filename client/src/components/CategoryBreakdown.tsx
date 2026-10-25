@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useTransactions } from '@/hooks/useBank'
+import { useCategoryRules, useTransactions } from '@/hooks/useBank'
 import { breakdownByCategory, CATEGORIES, type CategorySelection, type Direction } from '@/lib/categories'
 import { formatAmount, monthLabel } from '@/lib/format'
 import { countedTransactions } from '@/lib/summary'
@@ -25,26 +25,31 @@ export function CategoryBreakdown({
   onSelectionChange: (selection: CategorySelection) => void
 }) {
   const transactions = useTransactions(accountUid)
+  const rules = useCategoryRules(accountUid)
   const counted = useMemo(
     () => (transactions.data ? countedTransactions(transactions.data, accountCurrency) : null),
     [transactions.data, accountCurrency],
   )
   const rows = useMemo(
-    () => (counted ? breakdownByCategory(counted, selection.direction, selection.month) : []),
-    [counted, selection.direction, selection.month],
+    () => (counted ? breakdownByCategory(counted, selection.direction, selection.month, rules.data) : []),
+    [counted, selection.direction, selection.month, rules.data],
   )
 
   // If the selected category no longer has any transactions (e.g. after a refetch, or because
   // nothing is counted any more), drop it so the table isn't left filtered to nothing.
-  // Only once data has loaded, so a filter isn't dropped while the transactions are still loading.
+  // Only once data has loaded, so a filter isn't dropped while the transactions or the user's own
+  // categories are still loading.
   const selectedMissing =
-    counted !== null && selection.category !== undefined && !rows.some((row) => row.category === selection.category)
+    counted !== null &&
+    !rules.isPending &&
+    selection.category !== undefined &&
+    !rows.some((row) => row.category === selection.category)
   useEffect(() => {
     if (selectedMissing) onSelectionChange({ ...selection, category: undefined })
   }, [selectedMissing, selection, onSelectionChange])
 
   // Loading, errors and "no transactions" are shown by the table below.
-  if (!counted?.currency || counted.transactions.length === 0) return null
+  if (!counted?.currency || counted.transactions.length === 0 || rules.isPending) return null
   const { currency } = counted
 
   const largest = rows[0]?.amount ?? 0
@@ -134,7 +139,8 @@ export function CategoryBreakdown({
 
       {rows.length > 0 && rows.every((row) => row.category === 'otherOut' || row.category === 'otherIn') && (
         <p className="text-xs text-muted-foreground">
-          Categories are worked out from each transaction's description, and these didn't match any.
+          Categories are worked out from each transaction's description, and these didn't match any. Click a
+          transaction's category below to change it.
         </p>
       )}
     </section>

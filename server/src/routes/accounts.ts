@@ -3,6 +3,7 @@ import * as enableBanking from '../enableBankingClient.js'
 import { confirmEnded, SessionEndedError } from '../sessionEnded.js'
 import { sessionStore, type LatestSession } from '../sessionStore.js'
 import { budgetStore } from '../budgetStore.js'
+import { categoryRuleStore, type Direction } from '../categoryRuleStore.js'
 import {
   accountKey,
   getAccountTransactions,
@@ -89,7 +90,9 @@ accountsRouter.get('/:accountUid/transactions', requireSessionAccount, async (re
 const CATEGORY_ID = /^[a-z][a-zA-Z]{0,39}$/
 const MAX_BUDGET = 1_000_000_000
 
-function budgetKey(res: Response): string {
+// Budgets and category rules are filed under the stable account key, not the uid, which changes on
+// every reconnect.
+function storageKey(res: Response): string {
   return accountKey(res.locals.account as SessionAccount)
 }
 
@@ -104,7 +107,7 @@ function parseBudgetAmount(value: unknown): { cents: number } | { error: string 
 }
 
 accountsRouter.get('/:accountUid/budgets', requireSessionAccount, (_req, res) => {
-  res.json(budgetStore.list(budgetKey(res)))
+  res.json(budgetStore.list(storageKey(res)))
 })
 
 // Other websites can't change budgets: browsers only send a cross-site PUT or DELETE (or a JSON
@@ -120,10 +123,55 @@ accountsRouter.put('/:accountUid/budgets/:category', requireSessionAccount, (req
     res.status(400).json({ error: amount.error })
     return
   }
-  res.json(budgetStore.set(budgetKey(res), category, amount.cents))
+  res.json(budgetStore.set(storageKey(res), category, amount.cents))
 })
 
 accountsRouter.delete('/:accountUid/budgets/:category', requireSessionAccount, (req, res) => {
-  budgetStore.remove(budgetKey(res), req.params.category as string)
+  budgetStore.remove(storageKey(res), req.params.category as string)
+  res.status(204).end()
+})
+
+// Category rules: the user's own category for everything from one payee (see categoryRuleStore.ts).
+// The payee is free text, so it goes in the JSON body rather than the URL. Like budgets, they stay
+// editable once the bank connection has ended.
+const MAX_PAYEE_LENGTH = 200
+
+// The rule's direction and payee from a request body, or a message saying what's wrong with them.
+// The payee is trimmed, as the client's keys are, so " alepa " and "alepa" are the same rule.
+function parseRuleTarget(body: unknown): { direction: Direction; payee: string } | { error: string } {
+  const { direction, payee } = (body ?? {}) as { direction?: unknown; payee?: unknown }
+  if (direction !== 'in' && direction !== 'out') return { error: 'direction must be "in" or "out"' }
+  const trimmed = typeof payee === 'string' ? payee.trim() : ''
+  if (trimmed === '' || trimmed.length > MAX_PAYEE_LENGTH) {
+    return { error: `payee must be text of 1 to ${MAX_PAYEE_LENGTH} characters` }
+  }
+  return { direction, payee: trimmed }
+}
+
+accountsRouter.get('/:accountUid/category-rules', requireSessionAccount, (_req, res) => {
+  res.json(categoryRuleStore.list(storageKey(res)))
+})
+
+accountsRouter.put('/:accountUid/category-rules', requireSessionAccount, (req, res) => {
+  const target = parseRuleTarget(req.body)
+  if ('error' in target) {
+    res.status(400).json({ error: target.error })
+    return
+  }
+  const category = (req.body as { category?: unknown }).category
+  if (typeof category !== 'string' || !CATEGORY_ID.test(category)) {
+    res.status(400).json({ error: 'Unknown category' })
+    return
+  }
+  res.json(categoryRuleStore.set(storageKey(res), { ...target, category }))
+})
+
+accountsRouter.delete('/:accountUid/category-rules', requireSessionAccount, (req, res) => {
+  const target = parseRuleTarget(req.body)
+  if ('error' in target) {
+    res.status(400).json({ error: target.error })
+    return
+  }
+  categoryRuleStore.remove(storageKey(res), target.direction, target.payee)
   res.status(204).end()
 })

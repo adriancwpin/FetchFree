@@ -8,7 +8,7 @@ import { Budgets } from '@/components/Budgets'
 import { CategoryBreakdown, CategoryFilterChip } from '@/components/CategoryBreakdown'
 import { SpendingSummary } from '@/components/SpendingSummary'
 import { TransactionsTable } from '@/components/TransactionsTable'
-import { useAccounts, useBalances, useRefreshTransactions, useTransactions } from '@/hooks/useBank'
+import { useAccounts, useBalances, useCategoryRules, useRefreshTransactions, useTransactions } from '@/hooks/useBank'
 import type { Account, Balance } from '@/lib/api'
 import type { CategorySelection } from '@/lib/categories'
 import { formatAmount, timeAgo } from '@/lib/format'
@@ -105,6 +105,7 @@ function AccountCard({ account, readOnly }: { account: Account; readOnly: boolea
         {expanded && (
           <>
             <SpendingSummary accountUid={account.uid} accountCurrency={account.currency ?? null} />
+            <CategoryRulesError accountUid={account.uid} />
             <Budgets
               accountUid={account.uid}
               accountCurrency={account.currency ?? null}
@@ -131,6 +132,21 @@ function AccountCard({ account, readOnly }: { account: Account; readOnly: boolea
         )}
       </CardContent>
     </Card>
+  )
+}
+
+// Budgets, the breakdown and the table fall back to the automatic categories if the user's own
+// can't be loaded; this says so, once for all three, since budgets may then look off.
+function CategoryRulesError({ accountUid }: { accountUid: string }) {
+  const rules = useCategoryRules(accountUid)
+  if (!rules.isError) return null
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm text-destructive" role="status">
+      <span>Your own categories couldn't be loaded, so automatic ones are shown: {rules.error.message}</span>
+      <Button variant="ghost" size="xs" disabled={rules.isFetching} onClick={() => void rules.refetch()}>
+        Try again
+      </Button>
+    </div>
   )
 }
 
