@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useTransactions } from '@/hooks/useBank'
-import { formatAmount, monthLabel } from '@/lib/format'
+import { formatAmount, longDate, monthLabel } from '@/lib/format'
 import { addDays, summarizeByMonth, type MonthSummary } from '@/lib/summary'
 import { cn } from '@/lib/utils'
 
@@ -16,11 +16,6 @@ function signedAmount(value: number, currency: string): { text: string; classNam
 
 function countOf(count: number): string {
   return `${count} transaction${count === 1 ? ' is' : 's are'}`
-}
-
-function longDate(date: string): string {
-  const [year, month, day] = date.split('-').map(Number)
-  return new Date(year ?? 0, (month ?? 1) - 1, day ?? 1).toLocaleDateString(undefined, { dateStyle: 'medium' })
 }
 
 function formatCompact(value: number, currency: string): string {

@@ -197,3 +197,22 @@ describe('listAspsps', () => {
     expect(calls[0]!.query.get('psu_type')).toBe('personal')
   })
 })
+
+describe('getSessionStatus', () => {
+  it("returns Enable Banking's status for the session", async () => {
+    const calls = fakeBank(() => json({ status: 'REVOKED', accounts: [] }))
+
+    expect(await enableBanking.getSessionStatus('s 1')).toBe('REVOKED')
+    expect(calls[0]!.path).toBe('/sessions/s%201')
+  })
+
+  it('returns MISSING when Enable Banking does not know the session', async () => {
+    fakeBank(() => json({ error: 'SESSION_DOES_NOT_EXIST' }, 404))
+    expect(await enableBanking.getSessionStatus('gone')).toBe('MISSING')
+  })
+
+  it('throws other errors, so callers can tell "ended" from "could not check"', async () => {
+    fakeBank(() => json({ message: 'down' }, 503))
+    await expect(enableBanking.getSessionStatus('s1')).rejects.toBeInstanceOf(enableBanking.EnableBankingError)
+  })
+})

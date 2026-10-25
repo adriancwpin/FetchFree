@@ -1,13 +1,20 @@
 import { Router, type NextFunction, type Request, type Response } from 'express'
 import * as enableBanking from '../enableBankingClient.js'
-import { sessionStore } from '../sessionStore.js'
+import { confirmEnded, SessionEndedError } from '../sessionEnded.js'
+import { sessionStore, type LatestSession } from '../sessionStore.js'
 import { budgetStore } from '../budgetStore.js'
-import { accountKey, getAccountTransactions, type SessionAccount } from '../transactionSync.js'
+import {
+  accountKey,
+  getAccountTransactions,
+  getSavedTransactions,
+  type SessionAccount,
+} from '../transactionSync.js'
 
 export const accountsRouter = Router()
 
+// An ended session's accounts are still listed, so their saved data can be shown read-only.
 accountsRouter.get('/', (_req, res) => {
-  const session = sessionStore.getCurrentSession()
+  const session = sessionStore.getLatestSession()
   if (!session) {
     res.status(404).json({ error: 'No active bank session — connect a bank first' })
     return
@@ -27,28 +34,55 @@ function psuHeaders(req: Request): enableBanking.PsuHeaders {
   return headers
 }
 
-// Only proxy accounts that belong to the current session. The account is passed on in res.locals.
+// Only serve accounts that belong to the latest session (live or ended). The account and the
+// session are passed on in res.locals.
 function requireSessionAccount(req: Request, res: Response, next: NextFunction): void {
-  const session = sessionStore.getCurrentSession()
+  const session = sessionStore.getLatestSession()
   const account = session?.accounts.find((candidate) => candidate.uid === req.params.accountUid)
-  if (!account) {
+  if (!session || !account) {
     res.status(404).json({ error: 'Unknown account' })
     return
   }
   res.locals.account = account
+  res.locals.session = session
   next()
 }
 
+function sessionOf(res: Response): LatestSession {
+  return res.locals.session as LatestSession
+}
+
+// Every route that asks the bank goes through this. An ended session never reaches the bank, and a
+// refusal from the bank is checked with Enable Banking, so the client learns the connection has
+// ended (SESSION_ENDED) whichever route notices first.
+async function callBank<T>(res: Response, call: () => Promise<T>): Promise<T> {
+  const session = sessionOf(res)
+  if (session.ended) throw new SessionEndedError()
+  try {
+    return await call()
+  } catch (err) {
+    return confirmEnded(session.sessionId, err)
+  }
+}
+
+// Balances are only ever live from the bank, so there's nothing to show once the session has ended.
 accountsRouter.get('/:accountUid/balances', requireSessionAccount, async (req, res) => {
-  const balances = await enableBanking.getBalances(req.params.accountUid as string, psuHeaders(req))
-  res.json(balances)
+  res.json(await callBank(res, () => enableBanking.getBalances(req.params.accountUid as string, psuHeaders(req))))
 })
 
 // Served from the saved copy; the bank is only asked for what's new (see transactionSync.ts).
-// ?refresh=true asks the bank even if the saved copy is recent.
+// ?refresh=true asks the bank even if the saved copy is recent. Once the session has ended, only
+// the saved copy is served.
 accountsRouter.get('/:accountUid/transactions', requireSessionAccount, async (req, res) => {
   const account = res.locals.account as SessionAccount
-  res.json(await getAccountTransactions(account, psuHeaders(req), { refresh: req.query.refresh === 'true' }))
+  if (sessionOf(res).ended) {
+    const saved = getSavedTransactions(account)
+    if (!saved) throw new SessionEndedError()
+    res.json(saved)
+    return
+  }
+  const refresh = req.query.refresh === 'true'
+  res.json(await callBank(res, () => getAccountTransactions(account, psuHeaders(req), { refresh })))
 })
 
 // Budgets: a monthly spending limit per category (see budgetStore.ts).

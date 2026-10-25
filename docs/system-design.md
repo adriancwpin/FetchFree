@@ -239,6 +239,32 @@ A budget is a **monthly spending limit for one category**, e.g. Groceries €300
 
 Code: [server/src/budgetStore.ts](../server/src/budgetStore.ts), [client/src/components/Budgets.tsx](../client/src/components/Budgets.tsx).
 
+### 4.8 When a bank connection ends
+
+A connection ends in two ways:
+1. **It expires.** Our `valid_until` passes (at most 10 days after connecting).
+2. **The bank ends it early**, e.g. you revoke access in your bank's app, or the bank closes it.
+
+```
+Account-data request fails with 4xx (not 429)        (every bank call goes through callBank())
+  │
+  ├─ ask Enable Banking: GET /sessions/{id}            (one shared check for requests refused together)
+  │     ├─ EXPIRED / REVOKED / CLOSED
+  │     │      → bank_sessions.ended_reason = "revoked"…  → 401 { code: "SESSION_ENDED" }
+  │     ├─ anything else (AUTHORIZED, unclear, unknown session)
+  │     │      → pass the original error through
+  │     └─ the check itself fails → pass the original error through
+  │
+  └─ (expiry by date needs no check: valid_until has passed → ended = "expired")
+```
+
+- **Why double-check, and why so strict?** A 401 also means **our own JWT** was rejected (e.g. a wrong key), and reconnecting wouldn't fix that. Only the three unambiguous statuses count, because wrongly ending a working connection leaves it stuck read-only until you log in to the bank again. Even a 404 for the session isn't enough, since a misconfigured URL could cause that. The session is checked on **every** refusal, so a revocation is noticed straight away; the cost is one extra call to Enable Banking when a bank refuses something for another reason. An earlier version also ended sessions on unclear answers (recorded as `ended`); those are un-ended on startup.
+- **The client notices it anywhere.** `request()` in [api.ts](../client/src/lib/api.ts) tells a listener about every response with `code: "SESSION_ENDED"`, retries included. The listener in `main.tsx` refetches `/status` once per burst, restarting any status fetch already on its way, since that may have started before the server knew. The failed request itself is **retried**: by then the server has recorded the end, so the retry is answered from the saved copy. A failed **Refresh** (which isn't retried) reloads that account's transactions instead. `/status` then says `{ connected: false, ended: "revoked", bank }`.
+- **Read-only mode.** `App.tsx` shows a **"Reconnect your bank" banner** and keeps showing the accounts, chart, budgets and saved transactions. The server serves an ended session's accounts and **saved transactions without asking the bank**. Balances only ever come live, so they show "Balance not updated", and Refresh is hidden. The saved data's whole 6-month window is **as of the last sync**: it ends then (later months aren't shown as months with no spending) and starts 6 months before (old history doesn't slide out of view as time passes). Budgets are measured as of that date too. Budgets are our own data, so they can still be edited.
+- **Reconnect Nordea** starts a login with the same bank. The new session replaces the ended one, and because saved data and budgets are filed under the stable account key (§4.6), everything is back. **Connect a different bank** is Disconnect, which shows the bank picker.
+
+Code: [server/src/sessionEnded.ts](../server/src/sessionEnded.ts), [client/src/components/ReconnectBanner.tsx](../client/src/components/ReconnectBanner.tsx).
+
 ---
 
 ## 5. Data model (SQLite)
@@ -254,6 +280,7 @@ aspsp_name    TEXT  (bank)          valid_until   TEXT  (ISO date)
 aspsp_country TEXT                  created_at    TEXT
                                     aspsp_name    TEXT  (bank)
                                     aspsp_country TEXT
+                                    ended_reason  TEXT  (revoked, closed…)
 
 transactions                        account_syncs
 ─────────────────────────           ─────────────────────────────
@@ -274,7 +301,7 @@ amount_cents INTEGER
 ```
 
 - **`pending_auths`** holds logins that have started but not finished. A row is deleted when its callback arrives, or after 15 minutes.
-- **`bank_sessions`** holds the current connection: at most one live row.
+- **`bank_sessions`** holds the current connection: at most one row. Once it has ended (`ended_reason` set, or `valid_until` passed), it stays until you reconnect or disconnect, so its accounts can still be shown read-only (§4.8).
 - Dates are stored as ISO strings (`2026-11-01T13:00:00.000Z`). They're always written in that exact format, so comparing them as **text** gives the right order.
 - **Migrations.** When a new version adds columns, `addColumnIfMissing()` adds them to an existing database without losing rows.
 
@@ -290,7 +317,7 @@ Balances are **not stored**. They're fetched live and cached for 5 minutes in th
 
 | Method & path | What it does |
 |---|---|
-| `GET /api/auth/status` | `{ connected, validUntil, bank, loginUrl }` |
+| `GET /api/auth/status` | `{ connected, ended, validUntil, bank, loginUrl }`; `ended` says why the connection can't be used any more ("expired", "revoked"…) |
 | `DELETE /api/auth/session` | Disconnect: clears the sessions and revokes them at the bank |
 | `GET /api/banks/countries` | Country codes this app is enabled for |
 | `GET /api/banks?country=FI` | Banks in that country (name, logo, beta) |
@@ -303,7 +330,7 @@ Balances are **not stored**. They're fetched live and cached for 5 minutes in th
 | `GET /login?bank=…&country=…` | *Browser navigation*, not fetch: starts a bank login |
 | `GET /callback?code=…&state=…` | *The bank redirects here* after you approve |
 
-Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable Banking keep their status code (e.g. 401, 429, 504).
+Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable Banking keep their status code (e.g. 401, 429, 504). When the bank connection has ended, the error is `401 { "error": "…", "code": "SESSION_ENDED" }` (§4.8).
 
 ---
 
@@ -357,7 +384,7 @@ Errors come back as JSON: `{ "error": "message" }`. Errors that come from Enable
 2. **No UI tests.** The logic is covered by automated tests (§11), but the React components aren't.
 3. **Saved transactions are kept for 6 months and only deleted by age.** Disconnect keeps them (on purpose, see §4.6). An account you never reconnect keeps its last 6 months until you delete `server/data/`, and there's no "delete my data" button yet.
 4. **Categories are automatic only.** You can't change a transaction's category or add your own rules from the app yet. Now that transactions are saved, that's the natural next step. There's no search or weekly view either.
-5. If the bank revokes a session from its side, the app shows errors until you click Disconnect.
+5. **No warning before a connection expires.** Once it has ended, the app says so and offers reconnecting (§4.8), but it doesn't warn you a day or two in advance.
 
 ---
 
@@ -367,12 +394,12 @@ Run `npm test` in `server/` and in `client/`. GitHub Actions runs both on every 
 
 | Where | What it covers | How it fakes the outside world |
 |---|---|---|
-| `server/src/sessionStore.test.ts` | Single-use, expiring logins; replacing and revoking sessions | In-memory SQLite (`DB_PATH=:memory:`) |
+| `server/src/sessionStore.test.ts` | Single-use, expiring logins; replacing and revoking sessions; ended sessions (reason, expiry, not revoked again, replaced on reconnect) | In-memory SQLite (`DB_PATH=:memory:`) |
 | `server/src/db.migration.test.ts` | An old-format database gains the new columns and keeps its session | A temporary database file with the old schema |
 | `server/src/enableBankingClient.test.ts` | Timeouts, error pages, paging, the 89-day fallback rules, PSU headers, consent clamp | `fetch` replaced by a fake Enable Banking (`test/fakeBank.ts`) |
 | `server/src/bankDirectory.test.ts` | Caching, failures not cached, bank lookup | Fake Enable Banking |
 | `server/src/transactionStore.test.ts` | Replacing a range keeps older rows, pending → booked, unconfirmable pending dropped, moved dates, undated rows, truncated fetches never delete, pruning, gaps opening, filling and unchecked repairs, failures recorded | In-memory SQLite |
-| `server/src/routes.test.ts` | The whole HTTP flow: `/login` guard, `/callback` state and cookie checks, account guard, error handling; saved transactions (no bank call while fresh, 7-day refresh, bank down and its 5-minute wait, 401/403 passed through, re-fetch after truncation and its unchecked part, reaching back to pending, one shared fetch for overlapping requests, gap after a long break and clipped to the window, history kept across reconnects); budgets (save, replace, remove, validation, kept across reconnects) | supertest calls `app` directly, without a real server |
+| `server/src/routes.test.ts` | The whole HTTP flow: `/login` guard, `/callback` state and cookie checks, account guard, error handling; saved transactions (no bank call while fresh, 7-day refresh, bank down and its 5-minute wait, 401/403 passed through, re-fetch after truncation and its unchecked part, reaching back to pending, one shared fetch for overlapping requests, gap after a long break and clipped to the window, history kept across reconnects); budgets (save, replace, remove, validation, kept across reconnects); ended connections (confirmed with Enable Banking before saying so, read-only saved data with no bank calls, reconnecting) | supertest calls `app` directly, without a real server |
 | `client/src/lib/*.test.ts` | Summary maths, categories (real Nordea examples, totals match the chart), budgets (spent matches the breakdown, pace, status, sorting), formatting, API error and retry rules | `fetch` replaced in the API tests |
 
 `server/test/setup.ts` runs before every server test file. It generates a throwaway private key and sets the environment variables, so tests never read your real `.env`, key or database.
@@ -445,4 +472,8 @@ The <code>uid</code> is new with every bank login. The hash comes from the accou
 
 <details><summary>11. It's 10 October. You've spent €60 of a €100 Groceries budget. Is it "On track", "Spending fast" or "Over budget"?</summary>
 "Spending fast". 10 of 31 days have gone by, so the pace is about 32%, and 60% is more than 10 points ahead of it. It isn't over budget, because €60 is less than €100. By 25 October (pace about 81%) the same €60 would be "On track".
+</details>
+
+<details><summary>12. The bank answers a balances request with 401. Why doesn't the server immediately tell you to reconnect?</summary>
+A 401 can also mean Enable Banking rejected <b>our own JWT</b> (e.g. a wrong key), and reconnecting wouldn't fix that. So the server first asks Enable Banking for the session's state. Only if it's no longer <code>AUTHORIZED</code> does it record the session as ended and reply <code>SESSION_ENDED</code>; otherwise the original error comes through with its real message.
 </details>

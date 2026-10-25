@@ -14,7 +14,9 @@ import type { CategorySelection } from '@/lib/categories'
 import { formatAmount, timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-export function AccountsView() {
+// `readOnly` once the bank connection has ended: saved data only, no balances, no Refresh.
+// Budgets stay editable (they're our own data, not the bank's).
+export function AccountsView({ readOnly = false }: { readOnly?: boolean }) {
   const accounts = useAccounts()
 
   if (accounts.isPending) {
@@ -27,7 +29,7 @@ export function AccountsView() {
   return (
     <div className="flex w-full flex-col gap-4">
       {accounts.data.map((account) => (
-        <AccountCard key={account.uid} account={account} />
+        <AccountCard key={account.uid} account={account} readOnly={readOnly} />
       ))}
     </div>
   )
@@ -55,12 +57,12 @@ function primaryBalance(balances: Balance[] | undefined): Balance | undefined {
   return balances[0]
 }
 
-function AccountCard({ account }: { account: Account }) {
+function AccountCard({ account, readOnly }: { account: Account; readOnly: boolean }) {
   const [expanded, setExpanded] = useState(false)
   // The breakdown's Spending/Income choice, month and selected category, in one place: the breakdown
   // shows it and the table filters by it, so they stay in step (also across collapsing the card).
   const [selection, setSelection] = useState<CategorySelection>({ direction: 'out' })
-  const balances = useBalances(account.uid)
+  const balances = useBalances(account.uid, { enabled: !readOnly })
   const primary = primaryBalance(balances.data)
 
   return (
@@ -69,7 +71,10 @@ function AccountCard({ account }: { account: Account }) {
         <CardTitle>{account.name ?? account.product ?? 'Account'}</CardTitle>
         <CardDescription>{account.account_id?.iban ?? account.uid}</CardDescription>
         <CardAction className="flex flex-col items-end gap-1">
-          {balances.isPending ? (
+          {/* Checked first: a disabled query also counts as pending. */}
+          {readOnly ? (
+            <span className="text-sm text-muted-foreground">Balance not updated</span>
+          ) : balances.isPending ? (
             <Skeleton className="h-6 w-24" />
           ) : balances.isError ? (
             <span className="text-sm text-destructive">{balances.error.message}</span>
@@ -95,7 +100,7 @@ function AccountCard({ account }: { account: Account }) {
             {expanded ? <ChevronDown /> : <ChevronRight />}
             Activity
           </Button>
-          {expanded && <SyncStatus accountUid={account.uid} />}
+          {expanded && <SyncStatus accountUid={account.uid} readOnly={readOnly} />}
         </div>
         {expanded && (
           <>
@@ -105,6 +110,7 @@ function AccountCard({ account }: { account: Account }) {
               accountCurrency={account.currency ?? null}
               selection={selection}
               onSelectionChange={setSelection}
+              readOnly={readOnly}
             />
             <CategoryBreakdown
               accountUid={account.uid}
@@ -128,8 +134,9 @@ function AccountCard({ account }: { account: Account }) {
   )
 }
 
-// When the saved transactions were last checked with the bank, and a button to check now.
-function SyncStatus({ accountUid }: { accountUid: string }) {
+// When the saved transactions were last checked with the bank, and a button to check now (not once
+// the connection has ended: the banner above offers reconnecting instead).
+function SyncStatus({ accountUid, readOnly }: { accountUid: string; readOnly: boolean }) {
   const transactions = useTransactions(accountUid)
   const refresh = useRefreshTransactions(accountUid)
   // Re-render every minute so "3 minutes ago" keeps up.
@@ -148,11 +155,17 @@ function SyncStatus({ accountUid }: { accountUid: string }) {
   return (
     <div className="flex flex-col items-end gap-0.5 text-xs text-muted-foreground">
       <div className="flex items-center gap-1">
-        {data && <span>Updated {timeAgo(data.lastSyncedAt, now)}</span>}
-        <Button variant="ghost" size="xs" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
-          <RefreshCw className={cn(refresh.isPending && 'animate-spin')} aria-hidden="true" />
-          Refresh
-        </Button>
+        {data && (
+          <span>
+            {readOnly ? 'Last updated' : 'Updated'} {timeAgo(data.lastSyncedAt, now)}
+          </span>
+        )}
+        {!readOnly && (
+          <Button variant="ghost" size="xs" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+            <RefreshCw className={cn(refresh.isPending && 'animate-spin')} aria-hidden="true" />
+            Refresh
+          </Button>
+        )}
       </div>
       {refreshFailed ? (
         <p className="text-destructive" role="status">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countryName, formatAmount, formatUnsignedAmount, timeAgo } from '@/lib/format'
+import { calendarDate, countryName, formatAmount, formatUnsignedAmount, timeAgo } from '@/lib/format'
 
 describe('formatUnsignedAmount', () => {
   it('drops the sign, since the caller shows direction separately', () => {
@@ -42,5 +42,12 @@ describe('timeAgo', () => {
 
   it('passes an unreadable time through instead of showing NaN', () => {
     expect(timeAgo('not a time', now)).toBe('not a time')
+  })
+})
+
+describe('calendarDate', () => {
+  it("reads a date as that day in the user's own calendar, whatever their timezone", () => {
+    const date = calendarDate('2026-10-03')
+    expect([date.getFullYear(), date.getMonth(), date.getDate()]).toEqual([2026, 9, 3])
   })
 })

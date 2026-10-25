@@ -4,6 +4,18 @@ export function normalise(text: string): string {
   return text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
 }
 
+// "2026-10-03" as that day in the user's own calendar (local midnight), not as UTC midnight, which
+// would show as the day before for anyone west of UTC.
+export function calendarDate(date: string): Date {
+  const [year = 0, month = 1, day = 1] = date.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
+// "2026-10-03" → "3 Oct 2026" (in the user's locale).
+export function longDate(date: string): string {
+  return calendarDate(date).toLocaleDateString(undefined, { dateStyle: 'medium' })
+}
+
 // "2026-10" → "Oct", or "October 2026" with style "long".
 export function monthLabel(month: string, style: 'short' | 'long' = 'short'): string {
   const [year, monthIndex] = month.split('-').map(Number)

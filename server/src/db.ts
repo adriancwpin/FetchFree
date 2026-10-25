@@ -24,7 +24,9 @@ db.exec(`
     valid_until TEXT NOT NULL,
     created_at TEXT NOT NULL,
     aspsp_name TEXT,
-    aspsp_country TEXT
+    aspsp_country TEXT,
+    -- Set when the bank says the session has ended (see sessionEnded.ts).
+    ended_reason TEXT
   );
 
   -- Saved transactions, kept across reloads and reconnects (see transactionStore.ts).
@@ -62,7 +64,7 @@ db.exec(`
 `)
 
 // CREATE TABLE IF NOT EXISTS leaves tables from older versions unchanged, so add any columns
-// they're missing. Existing rows get NULL, which the code treats as "bank unknown".
+// they're missing. Existing rows get NULL, which the code treats as "bank unknown" or "not ended".
 function addColumnIfMissing(table: string, column: string, type: string): void {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
   if (!columns.some((existing) => existing.name === column)) {
@@ -74,3 +76,9 @@ for (const table of ['pending_auths', 'bank_sessions']) {
   addColumnIfMissing(table, 'aspsp_name', 'TEXT')
   addColumnIfMissing(table, 'aspsp_country', 'TEXT')
 }
+addColumnIfMissing('bank_sessions', 'ended_reason', 'TEXT')
+
+// An earlier version also ended sessions on unclear answers from Enable Banking (recorded as
+// "ended"). Only expired, revoked and closed count now, so give those sessions another chance: if
+// one really has ended, the next refusal from the bank records it properly.
+db.exec("UPDATE bank_sessions SET ended_reason = NULL WHERE ended_reason NOT IN ('expired', 'revoked', 'closed')")

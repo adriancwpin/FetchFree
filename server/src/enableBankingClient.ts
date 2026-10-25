@@ -160,6 +160,18 @@ export async function createSession(code: string): Promise<{
   return request('/sessions', { body: { code } })
 }
 
+// The session's state at Enable Banking: "AUTHORIZED" while it can be used, otherwise e.g.
+// "EXPIRED", "REVOKED" or "CLOSED"; "MISSING" if Enable Banking doesn't know it.
+export async function getSessionStatus(sessionId: string): Promise<string> {
+  try {
+    const data = await request<{ status?: string }>(`/sessions/${encodeURIComponent(sessionId)}`)
+    return data.status ?? 'UNKNOWN'
+  } catch (err) {
+    if (err instanceof EnableBankingError && err.status === 404) return 'MISSING'
+    throw err
+  }
+}
+
 export async function deleteSession(sessionId: string): Promise<void> {
   await request(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
