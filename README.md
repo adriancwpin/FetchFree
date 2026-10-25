@@ -9,7 +9,6 @@ For how it all works (the login flow, the data model, the security choices), see
 ```
 client/   React + Vite web app (what you see)           → http://localhost:5173
 server/   Express API; holds the Enable Banking key     → http://localhost:3000
-docs/     System design notes
 ```
 
 ## Prerequisites
