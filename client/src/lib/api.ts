@@ -108,25 +108,62 @@ export type EndReason = (typeof END_REASONS)[number]
 const statusSchema = z.object({
   connected: z.boolean(),
   // Why the latest connection can't be used any more, or null. While set, saved data is shown
-  // read-only with a "Reconnect your bank" banner. A reason this client doesn't know yet reads as
-  // the generic "ended" rather than failing the whole status.
+  // read-only with a "has ended" card offering the ways back. A reason this client doesn't know
+  // yet reads as the generic "ended" rather than failing the whole status.
   ended: z.enum(END_REASONS).catch('ended').nullable(),
   validUntil: z.string().nullable(),
   // The connected bank; null for connections made before the bank was recorded.
   bank: bankRefSchema.nullable(),
   // Server page that starts a bank login; the browser navigates there.
   loginUrl: z.string(),
+  // The server's clock when it answered; its clock decides when validUntil has passed.
+  serverTime: z.string().optional(),
 })
 
-export type Status = z.infer<typeof statusSchema>
+// serverTime is used up by getStatus (it measures the clock offset from it), so it isn't kept.
+export type Status = Omit<z.infer<typeof statusSchema>, 'serverTime'>
 
 // Where the browser goes to start a login with `bank` (a navigation, not a fetch: see /login).
 export function bankLoginHref(loginUrl: string, bank: { name: string; country: string }): string {
   return `${loginUrl}?${new URLSearchParams({ bank: bank.name, country: bank.country })}`
 }
 
-export function getStatus() {
-  return request('/api/auth/status', statusSchema)
+// How far the server's clock is ahead of the browser's (negative if behind); 0 until a /status
+// has said. Kept here rather than in the status data, which would otherwise differ on every fetch
+// and re-render the whole app each time. See getStatus for which measurements are kept.
+let clockOffsetMs = 0
+let clockOffsetRoundTripMs = Infinity
+// Round trips up to this are precise enough (within a second) to always be taken.
+const PRECISE_ROUND_TRIP_MS = 2000
+
+// Whether a new measurement should replace the current one. A measurement can be off by up to half
+// its round trip, so a slow one doesn't replace a more precise one, unless the two can't both be
+// right: then the current one is out of date (e.g. a clock was corrected after sleep) and the new
+// one, though rough, is better.
+function takeOffset(offset: number, roundTripMs: number): boolean {
+  if (roundTripMs <= Math.max(PRECISE_ROUND_TRIP_MS, clockOffsetRoundTripMs)) return true
+  return Math.abs(offset - clockOffsetMs) > roundTripMs / 2 + clockOffsetRoundTripMs / 2
+}
+
+// The time now by the server's clock. Countdowns to validUntil use this, so a browser clock that's
+// off doesn't warn early or late.
+export function serverClock(now: Date = new Date()): Date {
+  return new Date(now.getTime() + clockOffsetMs)
+}
+
+export async function getStatus(): Promise<Status> {
+  const sentAt = Date.now()
+  const { serverTime, ...status } = await request('/api/auth/status', statusSchema)
+  const receivedAt = Date.now()
+  // The server stamped its time somewhere between sending and receiving; the midpoint is the best
+  // guess, so a slow request doesn't make the server's clock look behind.
+  const offset = serverTime ? Date.parse(serverTime) - (sentAt + receivedAt) / 2 : Number.NaN
+  const roundTripMs = receivedAt - sentAt
+  if (!Number.isNaN(offset) && takeOffset(offset, roundTripMs)) {
+    clockOffsetMs = offset
+    clockOffsetRoundTripMs = roundTripMs
+  }
+  return status
 }
 
 export async function disconnect() {

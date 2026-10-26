@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { calendarDate, countryName, formatAmount, formatUnsignedAmount, timeAgo } from '@/lib/format'
+import {
+  calendarDate,
+  countryName,
+  dateTime,
+  formatAmount,
+  formatUnsignedAmount,
+  msUntil,
+  timeAgo,
+  timeLeft,
+} from '@/lib/format'
 
 describe('formatUnsignedAmount', () => {
   it('drops the sign, since the caller shows direction separately', () => {
@@ -32,16 +41,55 @@ describe('timeAgo', () => {
   const before = (ms: number) => new Date(now.getTime() - ms).toISOString()
 
   it.each([
+    // In English whatever the browser's language, like the sentences it goes into.
     [before(20_000), 'just now'],
-    [before(3 * 60_000), new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(-3, 'minute')],
-    [before(2 * 3_600_000), new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(-2, 'hour')],
-    [before(3 * 86_400_000), new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(-3, 'day')],
+    [before(3 * 60_000), '3 minutes ago'],
+    [before(2 * 3_600_000), '2 hours ago'],
+    [before(3 * 86_400_000), '3 days ago'],
   ])('describes %s relative to now', (iso, expected) => {
     expect(timeAgo(iso, now)).toBe(expected)
   })
 
   it('passes an unreadable time through instead of showing NaN', () => {
     expect(timeAgo('not a time', now)).toBe('not a time')
+  })
+})
+
+describe('msUntil', () => {
+  const now = new Date('2026-10-25T12:00:00.000Z')
+
+  it('is the time left, negative once passed, and null for an unreadable time', () => {
+    expect(msUntil('2026-10-25T12:01:00.000Z', now)).toBe(60_000)
+    expect(msUntil('2026-10-25T11:59:00.000Z', now)).toBe(-60_000)
+    expect(msUntil('not a time', now)).toBeNull()
+  })
+})
+
+describe('timeLeft', () => {
+  it.each([
+    [12 * 60_000, 'in 12 minutes'],
+    [5 * 3_600_000, 'in 5 hours'],
+    [2 * 86_400_000, 'in 2 days'],
+    // Rounded down, never promising more time than is left: 47h59m is 1 day, 59m59s is 59 minutes.
+    [2 * 86_400_000 - 60_000, 'in 1 day'],
+    [3_600_000 - 1000, 'in 59 minutes'],
+    // Always a number, never "tomorrow": 30 hours from now may be the day after tomorrow.
+    [30 * 3_600_000, 'in 1 day'],
+    // Under a minute, or none left.
+    [59_000, 'this minute'],
+    [0, 'this minute'],
+    [-5000, 'this minute'],
+  ])('describes %i ms left, in English', (msLeft, expected) => {
+    expect(timeLeft(msLeft)).toBe(expected)
+  })
+})
+
+describe('dateTime', () => {
+  it('formats a readable time with its date, and gives null for an unreadable one', () => {
+    expect(dateTime('2026-11-04T17:53:00.000Z')).toBe(
+      new Date('2026-11-04T17:53:00.000Z').toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+    )
+    expect(dateTime('not a time')).toBeNull()
   })
 })
 

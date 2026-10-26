@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   bankLoginHref,
@@ -6,6 +6,7 @@ import {
   getStatus,
   getTransactions,
   onSessionEnded,
+  serverClock,
   setCategoryRule,
 } from '@/lib/api'
 
@@ -90,6 +91,81 @@ describe('getStatus', () => {
   it('reads a connection-ended reason it does not know yet as the generic "ended"', async () => {
     respond({ connected: false, ended: 'cancelled', validUntil: null, bank: null, loginUrl: 'http://localhost:3000/login' })
     expect((await getStatus()).ended).toBe('ended')
+  })
+
+  const status = { connected: true, ended: null, validUntil: null, bank: null, loginUrl: 'http://localhost:3000/login' }
+
+  // How far serverClock() is from the browser's clock, in ms.
+  const measuredOffset = () => {
+    const browserNow = new Date('2026-10-25T15:00:00.000Z')
+    return serverClock(browserNow).getTime() - browserNow.getTime()
+  }
+  const THREE_HOURS = 3 * 3_600_000
+
+  describe('with a simulated request (fake timers, so timing is exact)', () => {
+    beforeEach(() => vi.useFakeTimers({ now: new Date('2026-10-25T12:00:00.000Z') }))
+    afterEach(() => vi.useRealTimers())
+
+    it("measures how far the server's clock is from the browser's, and doesn't keep serverTime", async () => {
+      // The browser's clock is 3 hours fast (no time passes: Date.now() is frozen).
+      respond({ ...status, serverTime: new Date(Date.now() - THREE_HOURS).toISOString() })
+      expect(await getStatus()).toEqual(status)
+      expect(measuredOffset()).toBe(-THREE_HOURS)
+
+      // A later answer without a readable time keeps the last measurement.
+      respond(status)
+      await getStatus()
+      respond({ ...status, serverTime: 'not a time' })
+      await getStatus()
+      expect(measuredOffset()).toBe(-THREE_HOURS)
+    })
+
+    // A request taking `roundTripMs`, to a server whose clock is `aheadMs` ahead, which stamps its
+    // time `stampedAfterMs` into the request (halfway unless said).
+    const answer = (roundTripMs: number, aheadMs: number, stampedAfterMs = roundTripMs / 2) =>
+      vi.stubGlobal('fetch', async () => {
+        const serverTime = new Date(Date.now() + stampedAfterMs + aheadMs).toISOString()
+        vi.advanceTimersByTime(roundTripMs)
+        return new Response(JSON.stringify({ ...status, serverTime }))
+      })
+
+    it('allows for the time the request took: the server stamped its time halfway', async () => {
+      answer(200, 0)
+      await getStatus()
+      // Measured from when the answer arrived instead, it would look 100 ms behind.
+      expect(measuredOffset()).toBe(0)
+    })
+
+    it("doesn't let a slow answer that agrees replace a more precise one", async () => {
+      answer(100, 60_000)
+      await getStatus()
+      expect(measuredOffset()).toBe(60_000)
+
+      // 5 seconds, stamped right at the start: its guess is 2.5 s out, within its own margin, so
+      // the 100 ms measurement stays.
+      answer(5000, 60_000, 0)
+      await getStatus()
+      expect(measuredOffset()).toBe(60_000)
+    })
+
+    it('takes a slow answer that proves the current one wrong, e.g. after a clock was corrected', async () => {
+      answer(100, 60_000)
+      await getStatus()
+
+      // Every request is slow now, but the clocks are 30 s further apart than measured: more than
+      // either measurement could be out by, so the old one must be out of date.
+      answer(5000, 90_000)
+      await getStatus()
+      expect(measuredOffset()).toBe(90_000)
+    })
+
+    it('always takes a fast answer', async () => {
+      answer(5000, 60_000)
+      await getStatus()
+      answer(100, 59_000)
+      await getStatus()
+      expect(measuredOffset()).toBe(59_000)
+    })
   })
 })
 

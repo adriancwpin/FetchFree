@@ -1,8 +1,8 @@
 import * as enableBanking from './enableBankingClient.js'
 import { sessionStore, type EndReason } from './sessionStore.js'
 
-// The bank connection can't be used any more: the client shows a "Reconnect your bank" banner and
-// keeps showing saved data, read-only. The error handler sends it as 401 with code SESSION_ENDED.
+// The bank connection can't be used any more: the client says so, offers the ways back and keeps
+// showing saved data, read-only. The error handler sends it as 401 with code SESSION_ENDED.
 export class SessionEndedError extends Error {
   readonly code = 'SESSION_ENDED'
 

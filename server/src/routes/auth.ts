@@ -42,7 +42,7 @@ function redirectToClient(res: Response, params: Record<string, string>): void {
 export const authRouter = Router()
 
 // `ended` says why the latest connection can't be used any more ("expired", "revoked"…); the
-// client then shows saved data read-only with a "Reconnect your bank" banner.
+// client then shows saved data read-only, with a card saying so and offering the ways back.
 authRouter.get('/status', (_req, res) => {
   const session = sessionStore.getLatestSession()
   res.json({
@@ -52,6 +52,9 @@ authRouter.get('/status', (_req, res) => {
     bank: session?.bank ?? null,
     // Where the client sends the browser to start a bank login.
     loginUrl: new URL('/login', config.callbackUrl).toString(),
+    // Our clock decides when validUntil has passed. The client compares this with its own to count
+    // down by our clock, so a browser clock that's off doesn't warn early or late.
+    serverTime: new Date().toISOString(),
   })
 })
 

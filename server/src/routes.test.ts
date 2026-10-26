@@ -188,6 +188,13 @@ describe('status and disconnect', () => {
     const after = await request(app).get('/api/auth/status')
     expect(after.body).toMatchObject({ connected: false, bank: null })
   })
+
+  it("includes the server's clock, which decides when a connection has expired", async () => {
+    const before = Date.now()
+    const { serverTime } = (await request(app).get('/api/auth/status')).body as { serverTime: string }
+    expect(Date.parse(serverTime)).toBeGreaterThanOrEqual(before)
+    expect(Date.parse(serverTime)).toBeLessThanOrEqual(Date.now())
+  })
 })
 
 describe('account routes', () => {

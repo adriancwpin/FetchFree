@@ -25,18 +25,51 @@ export function monthLabel(month: string, style: 'short' | 'long' = 'short'): st
   })
 }
 
-const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+// Relative times go inside the app's English sentences ("Updated 3 minutes ago", "expires in 2
+// days"), so they're in English too; a browser locale would give "expires 2 päivän päästä". Dates
+// and amounts stay in the user's own format.
+const relativeTime = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
 
-// "just now", "3 minutes ago", "yesterday"… for an ISO time in the past.
+// Milliseconds from `now` until an ISO time (negative once it has passed), or null if unreadable.
+export function msUntil(iso: string, now: Date = new Date()): number | null {
+  const ms = new Date(iso).getTime() - now.getTime()
+  return Number.isNaN(ms) ? null : ms
+}
+
+// "just now", "3 minutes ago", "yesterday"… for an ISO time in the past. An unreadable one is
+// shown as it is.
 export function timeAgo(iso: string, now: Date = new Date()): string {
-  const seconds = Math.round((new Date(iso).getTime() - now.getTime()) / 1000)
-  if (Number.isNaN(seconds)) return iso
+  const ms = msUntil(iso, now)
+  if (ms === null) return iso
+  const seconds = Math.round(ms / 1000)
   if (seconds > -60) return 'just now'
   const minutes = Math.round(seconds / 60)
   if (minutes > -60) return relativeTime.format(minutes, 'minute')
   const hours = Math.round(minutes / 60)
   if (hours > -24) return relativeTime.format(hours, 'hour')
   return relativeTime.format(Math.round(hours / 24), 'day')
+}
+
+// Always "in 1 day", never "tomorrow": 30 hours from now may be the day after tomorrow. English for
+// the same reason as relativeTime.
+const countdown = new Intl.RelativeTimeFormat('en', { numeric: 'always' })
+
+// "in 2 days", "in 5 hours", "in 12 minutes" for `msLeft` milliseconds. Rounded down, so it never
+// promises more time than is left. Under a minute (or none left) it's "this minute".
+export function timeLeft(msLeft: number): string {
+  const minutes = Math.floor(msLeft / 60_000)
+  if (minutes < 1) return relativeTime.format(0, 'minute')
+  if (minutes < 60) return countdown.format(minutes, 'minute')
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return countdown.format(hours, 'hour')
+  return countdown.format(Math.floor(hours / 24), 'day')
+}
+
+// "4 Nov 2026, 17:53" (in the user's locale), or null if unreadable.
+export function dateTime(iso: string): string | null {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 const regionNames = new Intl.DisplayNames(undefined, { type: 'region' })
