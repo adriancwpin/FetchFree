@@ -21,7 +21,7 @@ const queryClient = new QueryClient({
 })
 
 // Whenever a response says the bank connection has ended, refetch the status so the whole app
-// switches to read-only with the "Reconnect your bank" banner. A status fetch already on its way
+// switches to read-only with the "has ended" card. A status fetch already on its way
 // may have started before the server knew, so the first notice restarts it. Later notices while
 // that refetch is running wait for it instead: it started after the server knew, so it will see the
 // end, and restarting it again would only delay the switch.

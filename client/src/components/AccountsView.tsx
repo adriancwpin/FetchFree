@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,8 @@ import { CategoryBreakdown, CategoryFilterChip } from '@/components/CategoryBrea
 import { SpendingSummary } from '@/components/SpendingSummary'
 import { TransactionsTable } from '@/components/TransactionsTable'
 import { useAccounts, useBalances, useCategoryRules, useRefreshTransactions, useTransactions } from '@/hooks/useBank'
-import type { Account, Balance } from '@/lib/api'
+import { useNow } from '@/hooks/useNow'
+import { type Account, type Balance, serverClock } from '@/lib/api'
 import type { CategorySelection } from '@/lib/categories'
 import { formatAmount, timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -157,11 +158,7 @@ function SyncStatus({ accountUid, readOnly }: { accountUid: string; readOnly: bo
   const transactions = useTransactions(accountUid)
   const refresh = useRefreshTransactions(accountUid)
   // Re-render every minute so "3 minutes ago" keeps up.
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60_000)
-    return () => clearInterval(timer)
-  }, [])
+  const now = useNow(60_000)
 
   // While loading there's nothing to say yet. After a failed load, Refresh is the way to retry.
   if (transactions.isPending) return null
@@ -174,7 +171,8 @@ function SyncStatus({ accountUid, readOnly }: { accountUid: string; readOnly: bo
       <div className="flex items-center gap-1">
         {data && (
           <span>
-            {readOnly ? 'Last updated' : 'Updated'} {timeAgo(data.lastSyncedAt, now)}
+            {/* lastSyncedAt is by the server's clock, so it's compared with that. */}
+            {readOnly ? 'Last updated' : 'Updated'} {timeAgo(data.lastSyncedAt, serverClock(now))}
           </span>
         )}
         {!readOnly && (

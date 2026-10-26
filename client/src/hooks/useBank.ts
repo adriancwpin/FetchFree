@@ -1,6 +1,10 @@
+import { useEffect } from 'react'
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNow } from '@/hooks/useNow'
 import * as api from '@/lib/api'
 import { ruleMap } from '@/lib/categories'
+import { msUntilNextTick, statusCheckDue } from '@/lib/expiry'
+import { msUntil } from '@/lib/format'
 
 // Bank data changes slowly and every fetch is a call to the bank (some limit how often apps may
 // read an account), so don't refetch it on every tab switch.
@@ -32,7 +36,40 @@ export function useStatus() {
   return useQuery({ queryKey: ['status'], queryFn: api.getStatus })
 }
 
-export function useDisconnect() {
+// The time left until `validUntil` by the server's clock (null if unknown, negative once passed),
+// kept current for the connection bar: it re-renders just when what the bar shows changes or a
+// check with the server falls due (lib/expiry.ts). Once valid_until has passed, /status is asked
+// again on that schedule, so the app switches to the read-only "has expired" view by itself.
+// Everything is worked out from the wall clock at each tick, not from a long timer, which can be
+// paused while the computer sleeps. Never while a check is already on its way, so a slow one isn't
+// restarted. /status also refetches when the tab regains focus.
+export function useExpiryClock(validUntil: string | null): number | null {
+  const queryClient = useQueryClient()
+  const status = useStatus()
+  // When /status last answered or failed, by the browser's clock (0: never).
+  const checkedAt = Math.max(status.dataUpdatedAt, status.errorUpdatedAt)
+  const { isFetching } = status
+
+  // The times expiry.ts works from, at a moment by the browser's clock.
+  const timesAt = (browserNow: Date) => ({
+    msLeft: validUntil ? msUntil(validUntil, api.serverClock(browserNow)) : null,
+    sinceLastCheckMs: checkedAt === 0 ? Infinity : browserNow.getTime() - checkedAt,
+  })
+  // Re-checked whenever /status answers, e.g. on focus after the computer slept.
+  const browserNow = useNow((shown) => msUntilNextTick(timesAt(shown)), checkedAt)
+  const times = timesAt(browserNow)
+  const due = !isFetching && statusCheckDue(times)
+
+  // On each tick (`browserNow`) while one is due, so a check that somehow didn't start is retried.
+  useEffect(() => {
+    if (due) void queryClient.refetchQueries({ queryKey: ['status'], exact: true }, { cancelRefetch: false })
+  }, [due, browserNow, queryClient])
+
+  return times.msLeft
+}
+
+// `onDisconnected` runs once the connection is gone, e.g. to clear messages about it.
+export function useDisconnect({ onDisconnected }: { onDisconnected?: () => void } = {}) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: api.disconnect,
@@ -43,9 +80,12 @@ export function useDisconnect() {
         status && { ...status, connected: false, ended: null, validUntil: null },
       )
       queryClient.removeQueries({ queryKey: ['accounts'] })
+      onDisconnected?.()
     },
   })
 }
+
+export type Disconnect = ReturnType<typeof useDisconnect>
 
 export function useAccounts() {
   return useQuery({ queryKey: ['accounts'], queryFn: api.getAccounts, ...BANK_QUERY_OPTIONS })
