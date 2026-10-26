@@ -162,34 +162,9 @@ cd server && npm test        # API routes, login checks, paging, storage, sync
 cd client && npm test        # summaries, categories, budgets, formatting, expiry timing, API handling
 ```
 
-- **Isolated.** The tests never call Enable Banking and never read your `.env`, private key or database. They use a fake bank, a throwaway key and an in-memory database.
-- **Other checks:**
-  - `npm run test:watch` re-runs the tests as you edit.
-  - `npm run typecheck` (server) type-checks the tests too.
-  - `npm run lint` and `npm run build` (client) check code style and the production build.
-- **CI.** GitHub Actions runs everything on every push and pull request ([`.github/workflows/test.yml`](.github/workflows/test.yml)).
-
----
-
-## Project structure
-
-```
-FetchFree/
-├── client/                 React + Vite web app
-│   └── src/
-│       ├── components/     Accounts view, transactions table, summaries, budgets, connection status
-│       ├── hooks/          Data fetching and caching (TanStack Query)
-│       └── lib/            API client, categories, budgets, summaries, formatting, expiry timing
-├── server/                 Express API (holds the Enable Banking key)
-│   ├── src/
-│   │   ├── routes/         Auth (login, callback, status), banks, accounts
-│   │   ├── *Store.ts       SQLite storage: sessions, transactions, budgets, category rules
-│   │   └── enableBankingClient.ts
-│   └── test/               Test setup and the fake Enable Banking API
-└── .github/workflows/      Continuous integration
-```
-
----
+- The tests never call Enable Banking and never touch your `.env`, key or database. They use a fake bank, a throwaway key and an in-memory database.
+- `npm run test:watch` re-runs tests as you edit. `npm run typecheck` (server) type-checks the tests too.
+- GitHub Actions runs everything on every push and pull request (`.github/workflows/test.yml`).
 
 ## Troubleshooting
 
